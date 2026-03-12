@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Atomic Search</title>
+<style>
+body{font-family:Arial;background:#202124;color:white;text-align:center;}
+input{width:500px;padding:12px;font-size:18px;border-radius:30px;border:none;}
+button{padding:10px 16px;margin-left:10px;border:none;border-radius:6px;background:#3c4043;color:white;cursor:pointer;}
+.result{max-width:700px;margin:20px auto;text-align:left;}
+.result a{color:#8ab4f8;font-size:20px;}
+.url{color:#34a853;font-size:14px;}
+</style>
+</head>
+<body>
+<h1>Atomic Search</h1>
+<input id="q" placeholder="Search the web"><button onclick="search()">Search</button>
+<h3>Submit Website</h3>
+<input id="site"><button onclick="submitSite()">Submit</button>
+<div id="stats"></div>
+<div id="ai"></div>
+<div id="results"></div>
+<script>
+async function search(){
+  let q=document.getElementById("q").value
+  let res=await fetch("/search?q="+encodeURIComponent(q))
+  let data=await res.json()
+  let r=document.getElementById("results")
+  r.innerHTML=""
+  data.forEach(p=>{
+    let div=document.createElement("div")
+    div.className="result"
+    div.innerHTML=`<div class="url">${p.url}</div><a href="${p.url}" target="_blank">${p.title}</a><p>${p.text.slice(0,200)}</p>`
+    r.appendChild(div)
+  })
+  ai(q)
+}
+async function ai(q){
+  let res=await fetch("/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({q})})
+  let data=await res.json()
+  if(data.choices){
+    document.getElementById("ai").innerHTML="<h3>AI Answer</h3>"+data.choices[0].message.content
+  }
+}
+async function submitSite(){
+  let url=document.getElementById("site").value
+  await fetch("/submit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})})
+  alert("Site submitted")
+}
+// distributed crawling worker
+async function crawlWorker(){
+  let task = await fetch("/crawl-task").then(r=>r.json())
+  if(!task.url) return
+  try{
+    let html = await fetch(task.url).then(r=>r.text())
+    let links=[...html.matchAll(/href="(http[^"]+)"/g)].map(x=>x[1])
+    await fetch("/crawl-result",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:task.url,title:task.url,text:html.slice(0,1000),links})})
+  }catch(e){}
+}
+setInterval(crawlWorker,15000)
+// stats
+async function loadStats(){
+  let res=await fetch("/stats")
+  let s=await res.json()
+  document.getElementById("stats").innerHTML="Indexed pages: "+s.pages+" | Queue: "+s.queue
+}
+setInterval(loadStats,5000)
+loadStats()
+</script>
+</body>
+</html>
