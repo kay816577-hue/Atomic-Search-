@@ -1,14 +1,37 @@
-// Meta-search aggregator. Queries multiple public search engines via their
-// HTML endpoints (no API keys needed) and merges the results. All outbound
-// requests are anonymous — we do not forward any user-identifying headers.
+// Meta-search aggregator. Queries several public search endpoints, merges
+// them with Reciprocal Rank Fusion, and presents results under Atomic's own
+// brand — we deliberately do NOT expose which upstream ranked each result.
+// All outbound requests are anonymous — no user-identifying headers.
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
 
-const ENGINES = ["duckduckgo", "bing", "brave", "luxxle"];
+// Internal engine ids are used only for RRF / debugging. They are never
+// leaked to the client (the /api/search response reports results as sourced
+// from "atomic" only).
+const ENGINES = [
+  "primary",      // Bing HTML (en-US forced)
+  "ddg",          // DuckDuckGo HTML
+  "brave",        // Brave Search HTML
+  "searxng",      // community SearXNG instance (first working one)
+  "wikipedia",    // Wikipedia OpenSearch JSON
+  "marginalia",   // Marginalia small-web index
+];
+
+const ENGINE_PAGES_PER_META = 3;
+
+// Pool of public SearXNG instances — tried round-robin until one answers.
+const SEARXNG_POOL = [
+  "https://searx.be",
+  "https://searx.tiekoetter.com",
+  "https://priv.au",
+  "https://search.inetol.net",
+  "https://paulgo.io",
+  "https://search.projectsegfau.lt",
+  "https://search.sapti.me",
+];
 
 function rankBlend(lists) {
-  // Reciprocal Rank Fusion — fair, cheap and effective for merging ranked lists.
   const k = 60;
   const scores = new Map();
   const items = new Map();
@@ -18,13 +41,11 @@ function rankBlend(lists) {
       if (!key) return;
       const prev = scores.get(key) || 0;
       scores.set(key, prev + 1 / (k + idx + 1));
-      if (!items.has(key)) items.set(key, { ...item, url: key, engines: new Set() });
-      items.get(key).engines.add(item.engine);
+      if (!items.has(key)) items.set(key, { ...item, url: key });
     });
   }
   const merged = [...items.values()].map((it) => ({
     ...it,
-    engines: [...it.engines],
     score: scores.get(it.url) || 0,
   }));
   merged.sort((a, b) => b.score - a.score);
@@ -33,22 +54,23 @@ function rankBlend(lists) {
 
 // ---------- per-engine parsers ----------
 
-async function ddg(q) {
-  // DuckDuckGo's HTML endpoint doesn't require JS and is scrape-friendly.
-  const body = new URLSearchParams({ q, kl: "wt-wt" }).toString();
+async function ddg(q, page = 1) {
+  const s = (page - 1) * 20;
+  const body = new URLSearchParams({ q, kl: "wt-wt", s: String(s) }).toString();
   const res = await privateFetch("https://html.duckduckgo.com/html/", {
     method: "POST",
     body,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 8000,
   });
   const html = await res.text();
+  if (/anomaly-modal|Unusual activity/i.test(html)) return [];
   const { document } = parseHTML(html);
   const out = [];
-  for (const r of document.querySelectorAll(".result")) {
-    const a = r.querySelector("a.result__a");
+  for (const r of document.querySelectorAll(".result, .web-result")) {
+    const a = r.querySelector("a.result__a, .result__title a, h2 a");
     if (!a) continue;
     let href = a.getAttribute("href") || "";
-    // DDG wraps redirects in /l/?uddg=...
     try {
       if (href.startsWith("//duckduckgo.com/l/") || href.startsWith("/l/")) {
         const u = new URL(href, "https://duckduckgo.com");
@@ -56,10 +78,12 @@ async function ddg(q) {
       }
     } catch { /* ignore */ }
     const title = stripTags(a.textContent || "");
-    const snippet = stripTags(r.querySelector(".result__snippet")?.textContent || "");
-    if (!href || !title) continue;
-    out.push({ url: href, title, snippet, engine: "duckduckgo" });
-    if (out.length >= 15) break;
+    const snippet = stripTags(
+      r.querySelector(".result__snippet, .result__body")?.textContent || ""
+    );
+    if (!href?.startsWith("http") || !title) continue;
+    out.push({ url: href, title, snippet, engine: "ddg" });
+    if (out.length >= 25) break;
   }
   return out;
 }
@@ -70,7 +94,6 @@ function decodeBingRedirect(href) {
     if (!u.hostname.endsWith("bing.com") || !u.pathname.startsWith("/ck/a")) return href;
     const enc = u.searchParams.get("u");
     if (!enc) return href;
-    // Bing prepends "a1" then base64url-encodes the real URL.
     const b64 = enc.replace(/^a1/, "").replace(/-/g, "+").replace(/_/g, "/");
     const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
     const decoded = typeof atob === "function"
@@ -81,11 +104,21 @@ function decodeBingRedirect(href) {
   return href;
 }
 
-async function bing(q) {
-  const res = await privateFetch(
-    `https://www.bing.com/search?q=${encodeURIComponent(q)}&form=QBLH`,
-    { headers: { "Accept-Language": "en-US,en;q=0.9" } }
-  );
+async function primary(q, page = 1) {
+  // Bing HTML — force English US locale so results are useful regardless of
+  // the server's geolocation (Cloudflare / Render datacenters sometimes
+  // geolocate oddly). `mkt`, `cc`, `setlang` together pin it.
+  const first = (page - 1) * 10 + 1;
+  const url =
+    `https://www.bing.com/search?q=${encodeURIComponent(q)}` +
+    `&first=${first}&mkt=en-US&setlang=en-US&cc=US&form=QBLH`;
+  const res = await privateFetch(url, {
+    headers: {
+      "Accept-Language": "en-US,en;q=0.9",
+      Cookie: "SRCHHPGUSR=ADLT=OFF&IG=1&NRSLT=50; _EDGE_CD=m=en-us&u=en-us",
+    },
+    timeout: 8000,
+  });
   const html = await res.text();
   const { document } = parseHTML(html);
   const out = [];
@@ -99,21 +132,28 @@ async function bing(q) {
       li.querySelector(".b_caption p")?.textContent || li.querySelector("p")?.textContent || ""
     );
     if (!href.startsWith("http") || !title) continue;
-    out.push({ url: href, title, snippet, engine: "bing" });
-    if (out.length >= 15) break;
+    // Drop obvious Chinese-language leaked results (happens when Bing
+    // ignores our locale hints).
+    if (/[\u4E00-\u9FFF]/.test(title) && !/[a-z]{4}/i.test(title)) continue;
+    out.push({ url: href, title, snippet, engine: "primary" });
+    if (out.length >= 25) break;
   }
   return out;
 }
 
-async function brave(q) {
+async function brave(q, page = 1) {
+  const offset = (page - 1) * 10;
   const res = await privateFetch(
-    `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`
+    `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web&offset=${offset}`,
+    { timeout: 8000 }
   );
+  if (res.status >= 400) return [];
   const html = await res.text();
   const { document } = parseHTML(html);
   const out = [];
-  // Brave's HTML changes often — try a few known selectors.
-  const nodes = document.querySelectorAll("[data-type='web'] a, #results .snippet a, .snippet-title, .result a");
+  const nodes = document.querySelectorAll(
+    "[data-type='web'] a, #results .snippet a, .snippet-title, .result a"
+  );
   const seen = new Set();
   for (const a of nodes) {
     const href = a.getAttribute("href") || "";
@@ -121,7 +161,6 @@ async function brave(q) {
     const title = stripTags(a.textContent || "");
     if (!title) continue;
     seen.add(href);
-    // Snippet: try closest snippet container.
     let snippet = "";
     const container = a.closest(".snippet, [data-type='web'], .result") || a.parentElement;
     if (container) {
@@ -129,60 +168,157 @@ async function brave(q) {
       snippet = stripTags(p?.textContent || "");
     }
     out.push({ url: href, title, snippet, engine: "brave" });
-    if (out.length >= 15) break;
+    if (out.length >= 25) break;
   }
   return out;
 }
 
-async function luxxle(q) {
-  // Luxxle.com doesn't expose a public scrape endpoint. Instead we use a
-  // privacy-respecting SearXNG public instance as the "Luxxle" slot so the
-  // aggregator always has 4 sources. The endpoint is configurable via env.
-  const base = (typeof process !== "undefined" && process.env && process.env.SEARXNG_URL) || "https://searx.be";
-  const res = await privateFetch(
-    `${base}/search?q=${encodeURIComponent(q)}&format=json&language=en`,
-    { headers: { Accept: "application/json" } }
-  );
-  if (!res.ok) return [];
-  const data = await res.json().catch(() => ({}));
-  const out = [];
-  for (const r of data.results || []) {
-    if (!r.url || !r.title) continue;
-    out.push({
-      url: r.url,
-      title: stripTags(r.title),
-      snippet: stripTags(r.content || ""),
-      engine: "luxxle",
-    });
-    if (out.length >= 15) break;
+// Try SearXNG instances in order until one returns JSON results.
+async function searxng(q, page = 1) {
+  const configured = (typeof process !== "undefined" && process.env?.SEARXNG_URL) || "";
+  const pool = configured ? [configured, ...SEARXNG_POOL] : SEARXNG_POOL;
+  for (const base of pool) {
+    try {
+      const res = await privateFetch(
+        `${base.replace(/\/$/, "")}/search?q=${encodeURIComponent(q)}&format=json&language=en&pageno=${page}`,
+        { headers: { Accept: "application/json" }, timeout: 6000 }
+      );
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      if (!data || !Array.isArray(data.results) || !data.results.length) continue;
+      const out = [];
+      for (const r of data.results) {
+        if (!r.url || !r.title) continue;
+        out.push({
+          url: r.url,
+          title: stripTags(r.title),
+          snippet: stripTags(r.content || ""),
+          engine: "searxng",
+        });
+        if (out.length >= 25) break;
+      }
+      if (out.length) return out;
+    } catch { /* try next */ }
   }
-  return out;
+  return [];
 }
 
-const RUNNERS = { duckduckgo: ddg, bing, brave, luxxle };
+// Wikipedia OpenSearch — always-available, reliable knowledge source.
+async function wikipedia(q, page = 1) {
+  if (page > 1) return []; // OpenSearch doesn't paginate
+  try {
+    const res = await privateFetch(
+      `https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=20&namespace=0&search=${encodeURIComponent(q)}`,
+      { headers: { Accept: "application/json" }, timeout: 6000 }
+    );
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    if (!Array.isArray(data) || data.length < 4) return [];
+    const [, titles, snippets, urls] = data;
+    const out = [];
+    for (let i = 0; i < titles.length; i++) {
+      if (!urls[i] || !titles[i]) continue;
+      out.push({
+        url: urls[i],
+        title: titles[i],
+        snippet: snippets[i] || "",
+        engine: "wikipedia",
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
-export async function metaSearch(q) {
-  if (!q || !q.trim()) return { results: [], engines: {}, query: q };
+// Marginalia — small-web / independent sites. Their HTML is simple.
+async function marginalia(q, page = 1) {
+  try {
+    const res = await privateFetch(
+      `https://search.marginalia.nu/search?query=${encodeURIComponent(q)}&profile=no-js&page=${page}`,
+      { timeout: 6000 }
+    );
+    if (!res.ok) return [];
+    const html = await res.text();
+    const { document } = parseHTML(html);
+    const out = [];
+    for (const sec of document.querySelectorAll("section.card.search-result, section.search-result, .card.search-result")) {
+      const a = sec.querySelector("h2 a, a.title, a");
+      if (!a) continue;
+      const href = a.getAttribute("href") || "";
+      if (!href.startsWith("http")) continue;
+      const title = stripTags(a.textContent || "");
+      const snippet = stripTags(sec.querySelector("p")?.textContent || "");
+      if (!title) continue;
+      out.push({ url: href, title, snippet, engine: "marginalia" });
+      if (out.length >= 15) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+const RUNNERS = { primary, ddg, brave, searxng, wikipedia, marginalia };
+
+export async function metaSearch(q, opts = {}) {
+  if (!q || !q.trim()) {
+    return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0 };
+  }
   const query = q.trim().slice(0, 256);
-  const settled = await Promise.allSettled(
-    ENGINES.map((e) => RUNNERS[e](query).catch(() => []))
-  );
-  const perEngine = {};
-  const lists = [];
-  settled.forEach((s, i) => {
-    const name = ENGINES[i];
+  const page = Math.max(1, Number(opts.page) || 1);
+  const pagesPerEngine = Math.max(1, Math.min(5, Number(opts.pagesPerEngine) || ENGINE_PAGES_PER_META));
+  const perPage = Math.max(10, Math.min(200, Number(opts.perPage) || 100));
+
+  const jobs = [];
+  for (const engine of ENGINES) {
+    const run = RUNNERS[engine];
+    for (let i = 0; i < pagesPerEngine; i++) {
+      const enginePage = (page - 1) * pagesPerEngine + (i + 1);
+      jobs.push({ engine, enginePage, promise: run(query, enginePage).catch(() => []) });
+    }
+  }
+  const resolved = await Promise.allSettled(jobs.map((j) => j.promise));
+
+  const perEngineLists = {};
+  const perEngineStatus = {};
+  jobs.forEach((job, idx) => {
+    const s = resolved[idx];
     const list = s.status === "fulfilled" ? s.value : [];
-    perEngine[name] = { ok: s.status === "fulfilled" && list.length > 0, count: list.length };
-    if (list.length) lists.push(list);
+    (perEngineLists[job.engine] = perEngineLists[job.engine] || []).push({ enginePage: job.enginePage, list });
+    perEngineStatus[job.engine] = perEngineStatus[job.engine] || { count: 0 };
+    if (list.length) perEngineStatus[job.engine].count += list.length;
   });
-  let merged = rankBlend(lists);
-  merged = uniqBy(merged, (r) => r.url).slice(0, 30).map((r) => ({
+
+  const flatLists = [];
+  for (const [, pages] of Object.entries(perEngineLists)) {
+    pages.sort((a, b) => a.enginePage - b.enginePage);
+    const flat = [];
+    for (const { list } of pages) flat.push(...list);
+    if (flat.length) flatLists.push(flat);
+  }
+
+  let merged = rankBlend(flatLists);
+  merged = uniqBy(merged, (r) => r.url).map((r) => ({
     url: r.url,
     host: hostFromUrl(r.url),
     title: r.title,
     snippet: r.snippet,
-    engines: r.engines,
+    // Single, branded source — never leak the upstream engine id.
+    engines: ["atomic"],
     score: Math.round(r.score * 1000) / 1000,
   }));
-  return { query, results: merged, engines: perEngine };
+  const hasMore = merged.length > perPage;
+  const results = merged.slice(0, perPage);
+
+  return {
+    query,
+    page,
+    perPage,
+    results,
+    total: merged.length,
+    hasMore,
+    // Internal-only engine counts are omitted on purpose. Front-end doesn't
+    // need them and we don't want to leak upstream identity.
+  };
 }

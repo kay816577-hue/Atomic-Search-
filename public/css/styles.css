@@ -230,6 +230,20 @@ main { max-width: 900px; margin: 0 auto; padding: 20px 18px 120px; }
 .time { font-size: 11px; color: var(--text-dim); }
 .volume { width: 80px; grid-column: 5; }
 
+/* ---------------- pager ---------------- */
+.pager {
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 0; justify-content: center;
+}
+.pager button {
+  background: var(--bg-elev-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 8px 16px; font-weight: 500; cursor: pointer;
+}
+.pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+.pager-info { color: var(--text-dim); font-size: 13px; }
+
 /* ---------------- misc ---------------- */
 .empty { padding: 40px 0; text-align: center; color: var(--text-dim); }
 .loading {

@@ -13,11 +13,12 @@ import {
   cacheSet,
   searchPages,
   addSubmission,
+  enqueueCrawl,
   stats as storageStats,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 
-const SEARCH_TTL = 15 * 60 * 1000; // 15 min — good enough, not long enough to stale
+const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
 
 function privacyHeaders() {
@@ -27,6 +28,21 @@ function privacyHeaders() {
     "Permissions-Policy": "interest-cohort=(), browsing-topics=()",
     "Cache-Control": "no-store",
   };
+}
+
+// Fire-and-forget: enqueue top result URLs for our own crawler so the index
+// genuinely grows as people search. Capped per call so we never blow up the
+// queue on a single hit.
+function growIndex(results, cap = 12) {
+  try {
+    const picks = (results || []).slice(0, cap);
+    for (const r of picks) {
+      if (!r?.url) continue;
+      if (!isSafeUrl(r.url)) continue;
+      // SQLite queue is Node-only; on Workers this no-ops.
+      enqueueCrawl(r.url).catch(() => {});
+    }
+  } catch { /* ignore */ }
 }
 
 export function buildApp() {
@@ -44,13 +60,16 @@ export function buildApp() {
 
   app.get("/api/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
-    if (!q) return c.json({ query: "", results: [], engines: {} });
-    const key = `search:${q.toLowerCase()}`;
+    if (!q) return c.json({ query: "", results: [], engines: {}, page: 1, hasMore: false });
+    const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
+    const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 100));
+    const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
     const cached = await cacheGet(key);
     if (cached) return c.json({ ...cached, cached: true });
-    const own = await searchPages(q, 5).catch(() => []);
-    const result = await metaSearch(q);
-    // Merge our own index results — they go on top when exact title matches.
+
+    // Own-index matches — promoted only on page 1.
+    const own = page === 1 ? await searchPages(q, 10).catch(() => []) : [];
+    const result = await metaSearch(q, { page, perPage });
     if (own.length) {
       const ownFormatted = own.map((p) => ({
         url: p.url,
@@ -64,9 +83,11 @@ export function buildApp() {
       result.results = [
         ...ownFormatted,
         ...result.results.filter((x) => !seen.has(x.url)),
-      ];
+      ].slice(0, perPage);
     }
     await cacheSet(key, result, SEARCH_TTL);
+    // Auto-grow our index from top meta-results.
+    growIndex(result.results);
     return c.json(result);
   });
 
@@ -85,8 +106,18 @@ export function buildApp() {
     const body = await c.req.json().catch(() => ({}));
     const q = (body.q || c.req.query("q") || "").trim();
     if (!q) return c.json({ query: "", answer: "", sources: [] });
-    const search = await metaSearch(q);
-    const answer = await aiAnswer(q, search.results);
+    // Reuse the page-1 search cache if present — avoids a second full fan-out.
+    const cacheKey = `search:${q.toLowerCase()}:p1:n100`;
+    const cached = await cacheGet(cacheKey);
+    let results;
+    if (cached?.results?.length) {
+      results = cached.results;
+    } else {
+      const search = await metaSearch(q, { page: 1, perPage: 100 });
+      await cacheSet(cacheKey, search, SEARCH_TTL);
+      results = search.results;
+    }
+    const answer = await aiAnswer(q, results);
     return c.json(answer);
   });
 
@@ -101,7 +132,6 @@ export function buildApp() {
   app.get("/api/music/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
     if (!q) return c.json({ tracks: [] });
-    // Audius is an open, royalty-free music network. No API key needed.
     const host = "https://discoveryprovider.audius.co";
     const r = await fetch(`${host}/v1/tracks/search?query=${encodeURIComponent(q)}&app_name=AtomicSearch`).catch(() => null);
     if (!r || !r.ok) return c.json({ tracks: [] });
@@ -134,8 +164,8 @@ export function buildApp() {
     return c.json({ tracks });
   });
 
-  app.get("/proxy", async (c) => {
-    const url = c.req.query("url");
+  app.all("/proxy", async (c) => {
+    const url = c.req.query("url") || "";
     return proxyHandler(url);
   });
 
