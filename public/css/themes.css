@@ -1,0 +1,77 @@
+/* Theme tokens — toggled via [data-theme="..."] on <body>. */
+
+:root,
+[data-theme="atom-dark"] {
+  --bg: #0f1117;
+  --bg-elev: #161a23;
+  --bg-elev-2: #1e2330;
+  --text: #e7ecf3;
+  --text-dim: #98a2b3;
+  --accent: #4a90e2;
+  --accent-2: #7ed957;
+  --border: #242a37;
+  --danger: #ef4444;
+  --link: #7cc7ff;
+  --ring: rgba(74, 144, 226, 0.45);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="atom-light"] {
+  --bg: #f7f8fb;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #eef1f6;
+  --text: #101828;
+  --text-dim: #667085;
+  --accent: #2563eb;
+  --accent-2: #16a34a;
+  --border: #e4e7ec;
+  --danger: #b42318;
+  --link: #1d4ed8;
+  --ring: rgba(37, 99, 235, 0.3);
+  --shadow: 0 6px 30px rgba(16, 24, 40, 0.08);
+}
+
+[data-theme="neon"] {
+  --bg: #050011;
+  --bg-elev: #0a0120;
+  --bg-elev-2: #120235;
+  --text: #e9f3ff;
+  --text-dim: #9aa4c8;
+  --accent: #00ffe1;
+  --accent-2: #ff4ad6;
+  --border: #231a4a;
+  --danger: #ff5ca8;
+  --link: #7effef;
+  --ring: rgba(0, 255, 225, 0.45);
+  --shadow: 0 0 40px rgba(255, 74, 214, 0.2);
+}
+
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --bg-elev: #343746;
+  --bg-elev-2: #44475a;
+  --text: #f8f8f2;
+  --text-dim: #bfbfbf;
+  --accent: #bd93f9;
+  --accent-2: #50fa7b;
+  --border: #44475a;
+  --danger: #ff5555;
+  --link: #8be9fd;
+  --ring: rgba(189, 147, 249, 0.4);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme="solar"] {
+  --bg: #fdf6e3;
+  --bg-elev: #fffaef;
+  --bg-elev-2: #eee8d5;
+  --text: #073642;
+  --text-dim: #657b83;
+  --accent: #b58900;
+  --accent-2: #859900;
+  --border: #eee8d5;
+  --danger: #dc322f;
+  --link: #268bd2;
+  --ring: rgba(181, 137, 0, 0.3);
+  --shadow: 0 4px 24px rgba(7, 54, 66, 0.12);
+}

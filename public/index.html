@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Atomic Search — private meta-search</title>
+    <meta
+      name="description"
+      content="Atomic Search aggregates DuckDuckGo, Bing, Brave and Luxxle through an anonymising proxy. No trackers. No logs."
+    />
+    <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='10' fill='%234a90e2'/><ellipse cx='50' cy='50' rx='45' ry='18' fill='none' stroke='%234a90e2' stroke-width='3'/><ellipse cx='50' cy='50' rx='45' ry='18' fill='none' stroke='%234a90e2' stroke-width='3' transform='rotate(60 50 50)'/><ellipse cx='50' cy='50' rx='45' ry='18' fill='none' stroke='%234a90e2' stroke-width='3' transform='rotate(-60 50 50)'/></svg>" />
+    <link rel="stylesheet" href="/css/themes.css" />
+    <link rel="stylesheet" href="/css/styles.css" />
+  </head>
+  <body data-theme="atom-dark">
+    <header class="topbar">
+      <a class="brand" href="/">
+        <svg viewBox="0 0 100 100" width="28" height="28" aria-hidden="true">
+          <circle cx="50" cy="50" r="8" fill="currentColor" />
+          <ellipse cx="50" cy="50" rx="42" ry="16" fill="none" stroke="currentColor" stroke-width="3" />
+          <ellipse cx="50" cy="50" rx="42" ry="16" fill="none" stroke="currentColor" stroke-width="3" transform="rotate(60 50 50)" />
+          <ellipse cx="50" cy="50" rx="42" ry="16" fill="none" stroke="currentColor" stroke-width="3" transform="rotate(-60 50 50)" />
+        </svg>
+        <span>Atomic Search</span>
+      </a>
+
+      <form id="search-form" class="search-form" role="search">
+        <input
+          id="q"
+          type="search"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder="Search the web privately…"
+          aria-label="Search"
+        />
+        <button type="submit" aria-label="Search">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+            <path d="M16 16 L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </form>
+
+      <div class="topbar-right">
+        <label class="theme-picker" title="Theme">
+          <select id="theme">
+            <option value="atom-dark">Atom Dark</option>
+            <option value="atom-light">Atom Light</option>
+            <option value="neon">Neon</option>
+            <option value="dracula">Dracula</option>
+            <option value="solar">Solar</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="all" class="active">All</button>
+      <button data-tab="images">Images</button>
+      <button data-tab="news">News</button>
+      <button data-tab="ai">AI</button>
+    </nav>
+
+    <main id="main">
+      <section id="home" class="home">
+        <div class="home-inner">
+          <h1 class="logo-big">
+            <span class="a1">A</span><span class="a2">t</span><span class="a3">o</span><span class="a4">m</span><span class="a5">i</span><span class="a6">c</span>
+          </h1>
+          <p class="tagline">
+            One search, every engine. <strong>DuckDuckGo</strong> · <strong>Bing</strong> · <strong>Brave</strong> · <strong>Luxxle</strong>.
+            Proxied. Untracked.
+          </p>
+          <form id="search-form-hero" class="search-form big" role="search">
+            <input
+              id="q-hero"
+              type="search"
+              autocomplete="off"
+              placeholder="Search the web privately…"
+              aria-label="Search"
+            />
+            <button type="submit">Search</button>
+          </form>
+          <p class="privacy-line">
+            No cookies · no referrer · no analytics · no logs of your queries. <a href="#/privacy">Read privacy →</a>
+          </p>
+
+          <div class="submit">
+            <input id="submit-url" type="url" placeholder="Suggest a site for the public index (https://…)" />
+            <button id="submit-btn" type="button">Submit</button>
+          </div>
+          <p id="stats" class="stats"></p>
+        </div>
+      </section>
+
+      <section id="ai-summary" class="ai-summary" hidden>
+        <div class="ai-summary-inner">
+          <div class="ai-head">
+            <span class="ai-badge">AI summary</span>
+            <span id="ai-mode" class="ai-mode"></span>
+          </div>
+          <div id="ai-text" class="ai-text"></div>
+          <ol id="ai-sources" class="ai-sources"></ol>
+        </div>
+      </section>
+
+      <section id="results" class="results"></section>
+      <section id="images-grid" class="images-grid" hidden></section>
+      <section id="ai-full" class="ai-full" hidden></section>
+
+      <div id="empty" class="empty" hidden>
+        <p>No results.</p>
+      </div>
+    </main>
+
+    <!-- Integrated Wavesound music player -->
+    <aside id="player" class="player" aria-label="Music player">
+      <button id="player-toggle" class="player-toggle" title="Music">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M9 3v12.55A4 4 0 1 0 11 19V7h7V3H9z" fill="currentColor" />
+        </svg>
+      </button>
+      <div class="player-panel" id="player-panel" hidden>
+        <div class="player-header">
+          <strong>Wavesound</strong>
+          <input id="music-search" type="search" placeholder="Search music…" />
+          <button id="music-trending" type="button" title="Trending">Trending</button>
+        </div>
+        <ol id="music-list" class="music-list"></ol>
+        <div class="player-controls">
+          <img id="cover" class="cover" alt="" />
+          <div class="meta">
+            <div id="track-title" class="track-title">—</div>
+            <div id="track-artist" class="track-artist"></div>
+          </div>
+          <button id="prev" title="Previous">⏮</button>
+          <button id="play" title="Play / Pause">▶</button>
+          <button id="next" title="Next">⏭</button>
+          <input id="seek" class="seek" type="range" min="0" max="100" value="0" />
+          <span id="time" class="time">0:00</span>
+          <input id="volume" class="volume" type="range" min="0" max="100" value="70" />
+        </div>
+      </div>
+    </aside>
+
+    <script src="/js/themes.js"></script>
+    <script src="/js/music.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: atomic-search
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+    autoDeploy: true
+    healthCheckPath: /api/health
+    disk:
+      name: atomic-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
