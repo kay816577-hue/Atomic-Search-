@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: Install & smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install (no optional — skip native sqlite build)
+        run: npm install --omit=optional --no-audit --no-fund
+      - name: Boot server and hit /api/health
+        run: |
+          PORT=3456 node server.js &
+          SERVER_PID=$!
+          for i in $(seq 1 20); do
+            sleep 0.5
+            if curl -fsS http://localhost:3456/api/health >/dev/null; then
+              echo "health OK"
+              kill $SERVER_PID
+              wait $SERVER_PID 2>/dev/null || true
+              exit 0
+            fi
+          done
+          echo "server never became healthy"
+          kill $SERVER_PID 2>/dev/null || true
+          exit 1

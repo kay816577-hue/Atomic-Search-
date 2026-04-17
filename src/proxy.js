@@ -3,29 +3,9 @@
 // client are forwarded (no cookies, no referrer, no user-agent leak).
 
 import { privateFetch } from "./util.js";
+import { isSafeUrl } from "./safeurl.js";
 
 const MAX_BYTES = 4 * 1024 * 1024; // 4 MB safety cap
-
-function isSafeUrl(u) {
-  try {
-    const url = new URL(u);
-    if (!["http:", "https:"].includes(url.protocol)) return false;
-    // Block obvious internal / metadata endpoints.
-    const host = url.hostname;
-    if (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "169.254.169.254" ||
-      host.endsWith(".internal") ||
-      host.endsWith(".local")
-    ) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function absolutise(base, href) {
   try {

@@ -5,6 +5,7 @@
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags } from "./util.js";
 import { insertPage, nextCrawlTask, enqueueCrawl, stats } from "./storage.js";
+import { isSafeUrl } from "./safeurl.js";
 
 let running = false;
 
@@ -15,7 +16,7 @@ export function startCrawler(intervalMs = 5000) {
   const tick = async () => {
     try {
       const url = await nextCrawlTask();
-      if (!url) return;
+      if (!url || !isSafeUrl(url)) return;
       const res = await privateFetch(url, { timeout: 8000 });
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("text/html")) return;
@@ -37,7 +38,7 @@ export function startCrawler(intervalMs = 5000) {
         if (!href) continue;
         try {
           const abs = new URL(href, url).toString();
-          if (!abs.startsWith("http")) continue;
+          if (!isSafeUrl(abs)) continue;
           await enqueueCrawl(normaliseUrl(abs));
           queued++;
         } catch { /* ignore */ }

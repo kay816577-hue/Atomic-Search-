@@ -51,7 +51,9 @@ async function callHuggingFace(prompt) {
   if (!token) return null;
   const model = env("HF_MODEL") || "HuggingFaceH4/zephyr-7b-beta";
   const res = await privateFetch(
-    `https://api-inference.huggingface.co/models/${encodeURIComponent(model)}`,
+    // Don't encode the whole path — HF model ids are "org/name" and the `/`
+    // must stay a path separator, not be %2F-escaped. Defensive cleanup only.
+    `https://api-inference.huggingface.co/models/${model.trim().replace(/^\/+|\/+$/g, "")}`,
     {
       method: "POST",
       timeout: 25000,

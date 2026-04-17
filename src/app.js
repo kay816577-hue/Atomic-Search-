@@ -15,6 +15,7 @@ import {
   addSubmission,
   stats as storageStats,
 } from "./storage.js";
+import { isSafeUrl } from "./safeurl.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min — good enough, not long enough to stale
 const IMAGE_TTL = 30 * 60 * 1000;
@@ -92,7 +93,7 @@ export function buildApp() {
   app.post("/api/submit", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const url = (body.url || "").trim();
-    if (!/^https?:\/\//i.test(url)) return c.json({ ok: false, error: "Invalid URL" }, 400);
+    if (!isSafeUrl(url)) return c.json({ ok: false, error: "Invalid URL" }, 400);
     await addSubmission(url);
     return c.json({ ok: true });
   });

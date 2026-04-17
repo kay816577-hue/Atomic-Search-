@@ -1,0 +1,112 @@
+name: Deploy
+
+# Auto-deploys Atomic Search to Vercel, Cloudflare Pages and Render on every
+# push to main (or when manually triggered). Each job is guarded by the
+# presence of the relevant secret — leave a secret blank to skip that target.
+#
+# Required repo secrets (set in Settings → Secrets and variables → Actions):
+#
+#   Vercel:
+#     VERCEL_TOKEN       — https://vercel.com/account/tokens
+#     VERCEL_ORG_ID      — from .vercel/project.json after `vercel link`
+#     VERCEL_PROJECT_ID  — from .vercel/project.json after `vercel link`
+#
+#   Cloudflare Pages:
+#     CLOUDFLARE_API_TOKEN       — token with "Cloudflare Pages: Edit"
+#     CLOUDFLARE_ACCOUNT_ID      — from the Cloudflare dashboard URL
+#     CLOUDFLARE_PROJECT_NAME    — the Pages project name (e.g. atomic-search)
+#
+#   Render:
+#     RENDER_DEPLOY_HOOK_URL     — Service → Settings → Deploy Hook URL
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vercel:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip if no Vercel secrets
+        id: gate
+        run: |
+          if [ -z "${{ secrets.VERCEL_TOKEN }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No VERCEL_TOKEN — skipping Vercel deploy."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - if: steps.gate.outputs.skip == 'false'
+        name: Install Vercel CLI
+        run: npm install --global vercel@latest
+      - if: steps.gate.outputs.skip == 'false'
+        name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - if: steps.gate.outputs.skip == 'false'
+        name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - if: steps.gate.outputs.skip == 'false'
+        name: Deploy
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  cloudflare:
+    name: Deploy to Cloudflare Pages
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip if no Cloudflare secrets
+        id: gate
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] || [ -z "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Missing Cloudflare secrets — skipping Cloudflare Pages deploy."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - if: steps.gate.outputs.skip == 'false'
+        run: npm ci --omit=optional || npm install --omit=optional
+      - if: steps.gate.outputs.skip == 'false'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy public --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME || 'atomic-search' }}
+
+  render:
+    name: Trigger Render deploy
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "No RENDER_DEPLOY_HOOK_URL — skipping Render deploy."
+            exit 0
+          fi
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" && echo "Render deploy triggered."
