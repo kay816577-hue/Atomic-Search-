@@ -14,6 +14,12 @@
   var tabsEl = $("tabs");
   var pager = $("pager");
 
+  // Outbound clicks go to /go (safety-check interstitial) which then
+  // forwards through /proxy. Image sources still use /proxy directly so they
+  // render inline without an extra hop.
+  function safeLink(url) {
+    return "/go?url=" + encodeURIComponent(url);
+  }
   function proxied(url) {
     return "/proxy?url=" + encodeURIComponent(url);
   }
@@ -43,7 +49,7 @@
       '<span class="fav"></span>' +
       '<span class="host">' + escapeHtml(host) + '</span>' +
       '</div>' +
-      '<a class="title" target="_blank" rel="noreferrer noopener nofollow" href="' + proxied(r.url) + '">' +
+      '<a class="title" target="_blank" rel="noreferrer noopener nofollow" href="' + safeLink(r.url) + '">' +
         escapeHtml(r.title || r.url) +
       '</a>' +
       '<p class="snippet">' + escapeHtml(r.snippet || "") + '</p>';
@@ -73,7 +79,7 @@
     var frag = document.createDocumentFragment();
     list.forEach(function (r) {
       var a = document.createElement("a");
-      a.href = r.source ? proxied(r.source) : proxied(r.image);
+      a.href = safeLink(r.source || r.image);
       a.target = "_blank"; a.rel = "noreferrer noopener nofollow";
       var img = document.createElement("img");
       img.src = proxied(r.thumbnail || r.image);
@@ -98,7 +104,7 @@
     (ans.sources || []).forEach(function (s) {
       var li = document.createElement("li");
       var a = document.createElement("a");
-      a.href = proxied(s.url); a.target = "_blank";
+      a.href = safeLink(s.url); a.target = "_blank";
       a.rel = "noreferrer noopener nofollow";
       a.textContent = s.host + " — " + s.title;
       li.appendChild(a);
@@ -120,7 +126,7 @@
     (ans.sources || []).forEach(function (s) {
       var li = document.createElement("li");
       var a = document.createElement("a");
-      a.href = proxied(s.url); a.target = "_blank";
+      a.href = safeLink(s.url); a.target = "_blank";
       a.rel = "noreferrer noopener nofollow";
       a.textContent = s.host + " — " + s.title;
       li.appendChild(a);

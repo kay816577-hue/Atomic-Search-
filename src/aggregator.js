@@ -13,6 +13,7 @@ const ENGINES = [
   "primary",      // Bing HTML (en-US forced)
   "ddg",          // DuckDuckGo HTML
   "brave",        // Brave Search HTML
+  "startpage",    // Startpage HTML (free, Google-sourced, no tracking)
   "searxng",      // community SearXNG instance (first working one)
   "wikipedia",    // Wikipedia OpenSearch JSON
   "marginalia",   // Marginalia small-web index
@@ -203,6 +204,61 @@ async function searxng(q, page = 1) {
   return [];
 }
 
+// Startpage — proxies Google anonymously, free and open. HTML has CSS-ish
+// class-based markup we can parse.
+async function startpage(q, page = 1) {
+  try {
+    const res = await privateFetch(
+      `https://www.startpage.com/do/search?q=${encodeURIComponent(q)}&cat=web&pl=opensearch&page=${page}`,
+      {
+        headers: {
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: "https://www.startpage.com/",
+        },
+        timeout: 8000,
+      }
+    );
+    if (!res.ok) return [];
+    const html = await res.text();
+    if (/captcha|anti-?bot|anomaly/i.test(html)) return [];
+    const { document } = parseHTML(html);
+    const out = [];
+    const selectors = [
+      "section.w-gl__result",
+      ".w-gl__result",
+      "article.result",
+      ".result",
+      "section.result",
+      "[data-testid='result']",
+    ];
+    let nodes = [];
+    for (const sel of selectors) {
+      nodes = [...document.querySelectorAll(sel)];
+      if (nodes.length) break;
+    }
+    for (const n of nodes) {
+      const a =
+        n.querySelector("a.w-gl__result-title") ||
+        n.querySelector("a.result-link") ||
+        n.querySelector("h3 a, h2 a") ||
+        n.querySelector("a[href^='http']");
+      if (!a) continue;
+      const href = a.getAttribute("href") || "";
+      if (!href.startsWith("http")) continue;
+      const title = stripTags(a.textContent || "");
+      const snippet = stripTags(
+        n.querySelector(".w-gl__description, .description, p")?.textContent || ""
+      );
+      if (!title) continue;
+      out.push({ url: href, title, snippet, engine: "startpage" });
+      if (out.length >= 25) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 // Wikipedia OpenSearch — always-available, reliable knowledge source.
 async function wikipedia(q, page = 1) {
   if (page > 1) return []; // OpenSearch doesn't paginate
@@ -259,7 +315,7 @@ async function marginalia(q, page = 1) {
   }
 }
 
-const RUNNERS = { primary, ddg, brave, searxng, wikipedia, marginalia };
+const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia };
 
 export async function metaSearch(q, opts = {}) {
   if (!q || !q.trim()) {

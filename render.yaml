@@ -10,6 +10,10 @@ services:
         value: 20
       - key: DATA_DIR
         value: /opt/render/project/src/data
+      # Optional: enables the /go safety-check interstitial. Free key at
+      # https://www.virustotal.com/gui/my-apikey — 500 req/day.
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
     autoDeploy: true
     healthCheckPath: /api/health
     disk:

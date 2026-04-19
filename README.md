@@ -72,6 +72,7 @@ All optional. Defaults to zero-config.
 | `OPENAI_BASE_URL`   | OpenAI-compatible endpoint (Ollama, LM Studio, groq, together.ai, …).   |
 | `OPENAI_API_KEY`    | Optional auth for the above.                                            |
 | `OPENAI_MODEL`      | Model name for the OpenAI-compatible endpoint (default `llama3`).       |
+| `VIRUSTOTAL_API_KEY`| Enables VirusTotal safety check on every outbound click (free tier, 500 req/day). Grab one at https://www.virustotal.com/gui/my-apikey. |
 
 ## Architecture
 
