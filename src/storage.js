@@ -155,13 +155,76 @@ export async function cacheSet(key, value, ttlMs = 15 * 60 * 1000) {
   }
 }
 
+// Patterns that identify low-value pages we should NOT index: error pages,
+// login walls, captcha / bot-check pages, generic "home" or 404 placeholders.
+// Matches are case-insensitive and anchored at word boundaries where it
+// matters (so "logintrica" wouldn't false-positive on "login").
+const INDEX_JUNK_TITLE_RE = /^(error|404|403|not found|access denied|forbidden|captcha|cloudflare|just a moment|attention required|sign in|log in|login|please wait|redirecting|loading\.{0,3}|home)\b/i;
+const INDEX_JUNK_TEXT_HINTS = [
+  "please enable javascript",
+  "please enable cookies",
+  "checking your browser",
+  "verify you are human",
+  "access to this page has been denied",
+];
+
+function shouldIndex(title, text) {
+  const t = (title || "").trim();
+  const b = (text || "").trim();
+  // Reject thin pages (< 200 useful chars of body text). These are almost
+  // always error pages, redirects, or pages behind a login wall.
+  if (b.length < 200) return false;
+  // Reject junk titles.
+  if (INDEX_JUNK_TITLE_RE.test(t)) return false;
+  // Reject bot-check / JS-required pages.
+  const lower = b.toLowerCase();
+  for (const hint of INDEX_JUNK_TEXT_HINTS) {
+    if (lower.includes(hint) && b.length < 800) return false;
+  }
+  return true;
+}
+
 export async function insertPage({ url, title, text, host }) {
   if (!(await tryLoadSqlite())) return false;
+  // Quality gate: keep the index lean. Callers fire-and-forget; a rejected
+  // page simply doesn't land in the index instead of polluting search.
+  if (!shouldIndex(title, text)) return false;
   const existed = db.prepare("SELECT 1 FROM pages WHERE url = ?").get(url);
   db.prepare(
     "INSERT OR REPLACE INTO pages(url, title, text, host, indexed_at) VALUES(?, ?, ?, ?, ?)"
   ).run(url, title || url, (text || "").slice(0, 4000), host || "", now());
   if (!existed) sessionAdded += 1;
+  return true;
+}
+
+// One-shot prune: sweep rows that would fail shouldIndex() today. Used by
+// the admin endpoint to clean up a messy index accumulated before the
+// quality gate was in place.
+export async function pruneIndex() {
+  if (!(await tryLoadSqlite())) return { pruned: 0, remaining: 0 };
+  const rows = db.prepare("SELECT url, title, text FROM pages").all();
+  let pruned = 0;
+  const del = db.prepare("DELETE FROM pages WHERE url = ?");
+  for (const r of rows) {
+    if (!shouldIndex(r.title, r.text)) {
+      del.run(r.url);
+      pruned += 1;
+    }
+  }
+  const remaining = db.prepare("SELECT COUNT(*) AS n FROM pages").get().n || 0;
+  return { pruned, remaining };
+}
+
+// Nuclear option: wipe the index entirely (pages + queue + dead). Useful
+// when the user says "the index is a mess, start fresh". The cache and
+// submissions are left alone — they're not "the index".
+export async function clearIndex() {
+  if (!(await tryLoadSqlite())) return false;
+  db.exec(`
+    DELETE FROM pages;
+    DELETE FROM crawl_queue;
+    DELETE FROM dead_urls;
+  `);
   return true;
 }
 

@@ -15,6 +15,8 @@ import {
   addSubmission,
   enqueueCrawl,
   stats as storageStats,
+  pruneIndex,
+  clearIndex,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { buildAuthRoutes, currentUser } from "./auth.js";
@@ -130,6 +132,22 @@ export function buildApp() {
   });
   app.get("/api/health/engines", (c) => c.json(engineHealth()));
 
+  // Admin: sweep junk rows that would fail today's quality gate (error
+  // pages, login walls, thin placeholders, bot-check pages) without
+  // touching the rest of the index.
+  app.post("/api/admin/prune-index", async (c) => {
+    const r = await pruneIndex();
+    return c.json({ ok: true, ...r });
+  });
+
+  // Admin: wipe the Atomic index completely (pages + crawl queue + dead).
+  // Use when the accumulated index is so messy you want a clean restart.
+  // Cache and user submissions are preserved.
+  app.post("/api/admin/clear-index", async (c) => {
+    const ok = await clearIndex();
+    return c.json({ ok });
+  });
+
   app.get("/api/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
     if (!q) return c.json({ query: "", results: [], page: 1, hasMore: false });
@@ -197,13 +215,31 @@ export function buildApp() {
       extraLists: ownFused.length ? [ownFused] : [],
     });
 
+    // Order of precedence (top → bottom):
+    //   1. Strong Atomic-index hits (our own crawler found & title-matched)
+    //   2. Wikipedia knowledge card, if present
+    //   3. Remaining Startpage / meta results in their RRF order
+    //   4. Weaker Atomic-index tail matches (recall safety net)
+    // The aggregator already fuses ownFused into its RRF pool, so "own"
+    // items can appear anywhere in meta.results; we pull them to the top
+    // here to honour the user's preference for Atomic-first surfacing.
     const seen = new Set();
-    const metaOrdered = [];
+    const ownTop = [];
+    const wikiTop = [];
+    const metaRest = [];
     for (const r of meta.results) {
       if (!r?.url || seen.has(r.url)) continue;
       seen.add(r.url);
-      metaOrdered.push(r);
+      if (r.ownIndex) { ownTop.push(r); continue; }
+      if (/en\.wikipedia\.org\/wiki\//i.test(r.url)) { wikiTop.push(r); continue; }
+      metaRest.push(r);
     }
+    // Sort own-top by score descending so the strongest in-index match wins.
+    ownTop.sort((a, b) => (b.score || 0) - (a.score || 0));
+    // Keep at most ONE wikipedia knowledge card at top — too many is noise.
+    const wikiHead = wikiTop.slice(0, 1);
+    const wikiRest = wikiTop.slice(1);
+
     const ownTail = [];
     const ownCap = page === 1 ? 10 : 20;
     for (const r of ownTailPool.slice(0, ownCap)) {
@@ -214,8 +250,9 @@ export function buildApp() {
 
     // Drop NSFW results at the very end so nothing adult can leak through
     // regardless of which engine surfaced it or whether it's an own-index row.
-    const nsfwSafe = [...metaOrdered, ...ownTail].filter((r) => !isNsfwResult(r));
-    const merged = nsfwSafe.slice(0, perPage);
+    const ordered = [...ownTop, ...wikiHead, ...metaRest, ...wikiRest, ...ownTail]
+      .filter((r) => !isNsfwResult(r));
+    const merged = ordered.slice(0, perPage);
     const ownIndexCount =
       merged.filter((r) => r.ownIndex).length;
 
