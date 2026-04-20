@@ -67,6 +67,32 @@
     document.body.dataset.view = "results";
   }
 
+  /* ---------------- Index counter chip ---------------- */
+  function refreshIndexChip() {
+    fetch("/api/stats")
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!s) return;
+        var chip = $("index-chip");
+        var txt = $("index-chip-text");
+        if (!chip || !txt) return;
+        var pages = s.pages || 0;
+        var added = s.added || 0;
+        var queue = s.queue || 0;
+        var answers = s.answers || 0;
+        txt.innerHTML =
+          "<strong>" + pages.toLocaleString() + "</strong> indexed" +
+          " \u00b7 <strong>" + added.toLocaleString() + "</strong> added" +
+          " \u00b7 <strong>" + queue.toLocaleString() + "</strong> queued" +
+          (answers ? " \u00b7 <strong>" + answers.toLocaleString() + "</strong> answers" : "");
+        chip.title =
+          (s.persistent ? "Persistent index" : "Ephemeral index (no SQLite)") +
+          " \u2014 live counters refresh after every search";
+        chip.hidden = false;
+      })
+      .catch(function () {});
+  }
+
   /* ---------------- Search ---------------- */
   function setTab(t) {
     state.tab = t || "all";
@@ -124,6 +150,12 @@
 
     // Lazy-fetch safety verdicts in batches of 10.
     if (settings.safety) lazyLoadSafety(results);
+
+    // Refresh the index counter \u2014 the eager crawler has usually added a few
+    // pages by the time the response comes back.
+    refreshIndexChip();
+    setTimeout(refreshIndexChip, 2500);
+    setTimeout(refreshIndexChip, 7000);
   }
 
   function renderAtomicAnswer(a) {
@@ -475,15 +507,20 @@
       submitQuery($("q").value);
     });
 
-    // Stats on home.
+    // Stats on home + floating index chip.
     fetch("/api/stats").then(function (r) { return r.json(); }).then(function (s) {
       if (!s) return;
       $("stats").textContent =
         (s.persistent
-          ? "Atomic index: " + (s.pages || 0) + " pages indexed · " + (s.queue || 0) + " in queue"
+          ? "Atomic index: " + (s.pages || 0) + " pages indexed \u00b7 " + (s.queue || 0) + " in queue"
           : "Atomic is running. Submit sites to grow the index.") +
-        " · " + (s.cacheEntries || 0) + " cached queries";
+        " \u00b7 " + (s.cacheEntries || 0) + " cached queries" +
+        ((s.answers || 0) ? " \u00b7 " + s.answers + " remembered answers" : "");
     }).catch(function () {});
+    refreshIndexChip();
+    // Slow background refresh so the chip stays fresh while the crawler
+    // works through the queue.
+    setInterval(refreshIndexChip, 30000);
 
     // Boot: honour ?q=… on first load.
     try {

@@ -103,6 +103,13 @@ async function tryLoadSqlite() {
 
 const lru = new LRU(1000);
 
+// Lifetime counters since process boot. These are NOT user data — they're
+// aggregate health metrics (how many pages the crawler has written in this
+// session, how many fresh pages we've seen). Exposed via /api/stats so the
+// UI can show a live "cached / added / queue" chip.
+const sessionStart = now();
+let sessionAdded = 0;
+
 export async function cacheGet(key) {
   const mem = lru.get(key);
   if (mem && (!mem.expiresAt || mem.expiresAt > now())) return mem.value;
@@ -134,9 +141,11 @@ export async function cacheSet(key, value, ttlMs = 15 * 60 * 1000) {
 
 export async function insertPage({ url, title, text, host }) {
   if (!(await tryLoadSqlite())) return false;
+  const existed = db.prepare("SELECT 1 FROM pages WHERE url = ?").get(url);
   db.prepare(
     "INSERT OR REPLACE INTO pages(url, title, text, host, indexed_at) VALUES(?, ?, ?, ?, ?)"
   ).run(url, title || url, (text || "").slice(0, 4000), host || "", now());
+  if (!existed) sessionAdded += 1;
   return true;
 }
 
@@ -277,11 +286,20 @@ export async function putAnswer(q, { answer, mode, sources }) {
 }
 
 export async function stats() {
-  const base = { cacheEntries: lru.size(), persistent: false, pages: 0, queue: 0 };
+  const base = {
+    cacheEntries: lru.size(),
+    persistent: false,
+    pages: 0,
+    queue: 0,
+    answers: 0,
+    added: sessionAdded,
+    uptimeMs: now() - sessionStart,
+  };
   if (await tryLoadSqlite()) {
     base.persistent = true;
     base.pages = db.prepare("SELECT COUNT(*) AS c FROM pages").get().c;
     base.queue = db.prepare("SELECT COUNT(*) AS c FROM crawl_queue").get().c;
+    base.answers = db.prepare("SELECT COUNT(*) AS c FROM answers").get().c;
   }
   return base;
 }
