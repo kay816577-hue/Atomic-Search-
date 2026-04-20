@@ -20,7 +20,7 @@ import {
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { buildAuthRoutes, currentUser } from "./auth.js";
-import { scanDownload } from "./scan.js";
+import { scanDownload, scanBuffer } from "./scan.js";
 import { crawlOne } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
 
@@ -41,21 +41,64 @@ function privacyHeaders() {
 // Atomic index grows on every search (instead of waiting 5s per tick), and
 // enqueue the rest for the background crawler to pick up. NSFW URLs are
 // excluded from both the eager crawl and the queue — we never index them.
-function growIndex(results, { eager = 10, queueCap = 30 } = {}) {
+// Kicks off eager crawls for the top N URLs and queues the rest. Returns a
+// promise that resolves when the top `awaitTop` eager crawls settle OR when
+// `awaitBudgetMs` elapses (whichever comes first). Callers can `await` this
+// slice to guarantee freshly-indexed Atomic hits surface on the very first
+// search, while still letting the rest of the crawl run in the background.
+function growIndex(
+  results,
+  { eager = 10, queueCap = 30, awaitTop = 0, awaitBudgetMs = 2500 } = {}
+) {
   try {
     const urls = (results || [])
       .map((r) => r?.url)
       .filter((u) => u && isSafeUrl(u) && !isNsfwUrl(u));
-    // Eager: crawl top N now, in parallel, each bounded by 5s.
     const head = urls.slice(0, eager);
-    for (const u of head) {
-      crawlOne(u, { timeoutMs: 5000 }).catch(() => {});
-    }
-    // Rest: queue for the background crawler.
+    const eagerPromises = head.map((u) =>
+      crawlOne(u, { timeoutMs: 5000 }).catch(() => false)
+    );
     for (const u of urls.slice(eager, queueCap)) {
       enqueueCrawl(u).catch(() => {});
     }
+    if (awaitTop > 0 && eagerPromises.length) {
+      const topSlice = eagerPromises.slice(0, awaitTop);
+      return Promise.race([
+        Promise.all(topSlice),
+        new Promise((r) => setTimeout(r, awaitBudgetMs)),
+      ]).then(() => {});
+    }
   } catch { /* ignore */ }
+  return Promise.resolve();
+}
+
+// Build the Atomic-index-enriched result objects for a given query from the
+// current storage snapshot. Pulled out so we can run it both before and
+// after the eager crawl without duplicating the scoring/shaping logic.
+async function buildOwnResults(q) {
+  const ownRaw = await searchPages(q, 30).catch(() => []);
+  return ownRaw.map((p) => {
+    const score = scoreOwnIndexRow(p, q);
+    const titleHit =
+      (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
+      (q || "")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length >= 2)
+        .every((t) => (p.title || "").toLowerCase().includes(t));
+    return {
+      url: p.url,
+      host: p.host,
+      title: p.title,
+      text: p.text,
+      snippet: (p.text || "").slice(0, 240),
+      engine: "atomic-index",
+      engines: ["atomic-index"],
+      score,
+      titleHit,
+      ownIndex: true,
+    };
+  });
 }
 
 // Semantic-ish scoring for own-index rows. We don't have embeddings (no
@@ -167,53 +210,75 @@ export function buildApp() {
     const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
     const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
-    const cached = await cacheGet(key);
-    if (cached) return c.json({ ...cached, cached: true });
 
-    // Own-index matches — fetched on every page. Strong hits (title match
-    // OR very high score) are fused into the RRF pool as an additional
-    // "engine", so they compete head-to-head with meta results. Weaker
-    // tail matches are still appended below, gated by title-hit to avoid
-    // body-word leaks (e.g. hono.dev mentioning "Google Fonts" on a query
-    // for "google").
-    const ownRaw = await searchPages(q, 30).catch(() => []);
-    const ownScored = ownRaw.map((p) => {
-      const score = scoreOwnIndexRow(p, q);
-      const titleHit =
-        (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
-        (q || "")
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((t) => t.length >= 2)
-          .every((t) => (p.title || "").toLowerCase().includes(t));
-      return {
-        url: p.url,
-        host: p.host,
-        title: p.title,
-        text: p.text,
-        snippet: (p.text || "").slice(0, 240),
-        engine: "atomic-index",
-        score,
-        titleHit,
-        ownIndex: true,
-      };
-    });
-    // Top-tier rows (strong match) go into the fusion pool as an extra list.
-    const ownFused = ownScored
-      .filter((r) => r.titleHit && r.score >= 3)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 15);
-    // Second-tier rows (weaker but still title-hit) will be appended below
-    // so we never lose recall on genuinely relevant in-index pages.
-    const ownTailPool = ownScored
-      .filter((r) => r.titleHit && r.score >= 1 && !ownFused.find((f) => f.url === r.url))
-      .sort((a, b) => b.score - a.score);
+    // Helper: pulls the strong / tail Atomic-hit buckets out of the current
+    // index state. Runs multiple times per request (before meta, after eager
+    // crawl, and on cache hits) so every response reflects the freshest
+    // index, not a stale snapshot from when the query was first cached.
+    const splitOwn = async () => {
+      const scored = await buildOwnResults(q);
+      const fused = scored
+        .filter((r) => r.titleHit && r.score >= 3)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 15);
+      const tail = scored
+        .filter((r) => r.titleHit && r.score >= 1 && !fused.find((f) => f.url === r.url))
+        .sort((a, b) => b.score - a.score);
+      return { fused, tail };
+    };
+
+    const cached = await cacheGet(key);
+    if (cached) {
+      // Re-run the own-index query LIVE even on cache hits. The meta slice
+      // and ordering come from the cached response, but any pages we've
+      // crawled since the cache was written get merged in so users actually
+      // see the Atomic index growing instead of a frozen "0 from Atomic".
+      const { fused, tail } = await splitOwn();
+      const freshOwn = [...fused, ...tail];
+      const seenCached = new Set();
+      const ownTopFresh = [];
+      const rest = [];
+      for (const r of freshOwn) {
+        if (!r.url || seenCached.has(r.url)) continue;
+        seenCached.add(r.url);
+        ownTopFresh.push(r);
+      }
+      for (const r of cached.results || []) {
+        if (!r?.url) continue;
+        if (r.ownIndex) continue; // replaced by freshOwn
+        if (seenCached.has(r.url)) continue;
+        seenCached.add(r.url);
+        rest.push(r);
+      }
+      ownTopFresh.sort((a, b) => (b.score || 0) - (a.score || 0));
+      const mergedFresh = [...ownTopFresh, ...rest].slice(0, perPage);
+      const ownIndexCount = mergedFresh.filter((r) => r.ownIndex).length;
+      // Fire-and-forget: keep growing the index on repeat searches too.
+      growIndex(mergedFresh).catch(() => {});
+      return c.json({ ...cached, results: mergedFresh, ownIndexCount, cached: true });
+    }
+
+    // Cold path: first time we've seen this query (in this cache window).
+    // 1. Snapshot own-index hits we already have.
+    // 2. Run meta search with strong hits fused into the RRF pool.
+    // 3. Kick off eager crawl of top meta URLs and AWAIT a bounded slice so
+    //    genuinely new results already exist in our index by the time we
+    //    respond — i.e. the very first search for a new query can still
+    //    show Atomic hits, not just on the repeat.
+    // 4. Re-query own-index to pick up pages crawled during step 3.
+    let { fused: ownFused, tail: ownTailPool } = await splitOwn();
 
     const meta = await metaSearch(q, {
       page,
       perPage,
       extraLists: ownFused.length ? [ownFused] : [],
     });
+
+    // Eager-crawl top 5 meta URLs with a 2.5s budget. The rest are queued
+    // for the background crawler as usual.
+    await growIndex(meta.results, { awaitTop: 5, awaitBudgetMs: 2500 }).catch(() => {});
+    // Re-query so newly-indexed pages surface on this same response.
+    ({ fused: ownFused, tail: ownTailPool } = await splitOwn());
 
     // Order of precedence (top → bottom):
     //   1. Strong Atomic-index hits (our own crawler found & title-matched)
@@ -227,6 +292,13 @@ export function buildApp() {
     const ownTop = [];
     const wikiTop = [];
     const metaRest = [];
+    // Seed ownTop from the *post-crawl* splitOwn so newly-indexed pages are
+    // included even if they weren't in the meta.results RRF pool.
+    for (const r of ownFused) {
+      if (!r?.url || seen.has(r.url)) continue;
+      seen.add(r.url);
+      ownTop.push(r);
+    }
     for (const r of meta.results) {
       if (!r?.url || seen.has(r.url)) continue;
       seen.add(r.url);
@@ -234,9 +306,7 @@ export function buildApp() {
       if (/en\.wikipedia\.org\/wiki\//i.test(r.url)) { wikiTop.push(r); continue; }
       metaRest.push(r);
     }
-    // Sort own-top by score descending so the strongest in-index match wins.
     ownTop.sort((a, b) => (b.score || 0) - (a.score || 0));
-    // Keep at most ONE wikipedia knowledge card at top — too many is noise.
     const wikiHead = wikiTop.slice(0, 1);
     const wikiRest = wikiTop.slice(1);
 
@@ -248,17 +318,16 @@ export function buildApp() {
       ownTail.push({ ...r, engines: ["atomic-index"] });
     }
 
-    // Drop NSFW results at the very end so nothing adult can leak through
-    // regardless of which engine surfaced it or whether it's an own-index row.
     const ordered = [...ownTop, ...wikiHead, ...metaRest, ...wikiRest, ...ownTail]
       .filter((r) => !isNsfwResult(r));
     const merged = ordered.slice(0, perPage);
-    const ownIndexCount =
-      merged.filter((r) => r.ownIndex).length;
+    const ownIndexCount = merged.filter((r) => r.ownIndex).length;
 
     const out = { ...meta, results: merged, ownIndexCount };
     await cacheSet(key, out, SEARCH_TTL);
-    growIndex(merged);
+    // The eager slice already awaited top-5; fire-and-forget the rest so the
+    // index keeps growing in the background without adding latency.
+    growIndex(merged, { eager: 10, queueCap: 30 }).catch(() => {});
     return c.json(out);
   });
 
@@ -458,18 +527,45 @@ ${verdict === "pending" ? `<script>
   // Auth routes (Google OAuth + email magic link). No-op if not configured.
   app.route("/", buildAuthRoutes());
 
-  // Download safety scanner. Logged-in only; falls back to a friendly error
-  // if there's no VT key.
+  // Safety scanner — public, no login required. The Scan tab uses these
+  // endpoints to let anyone check a URL or upload a file against VirusTotal
+  // before opening / running it. All three modes share hash-first caching so
+  // "known" files/URLs return instantly and we don't hammer VT.
+  //
+  //   • POST /api/scan/url      — scan a URL (domain/resource-level verdict)
+  //   • POST /api/scan/file     — download a URL, hash it, check the file
+  //   • POST /api/scan/upload   — multipart upload a file directly, scan it
+  app.post("/api/scan/url", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const url = (body.url || "").trim();
+    if (!url) return c.json({ ok: false, error: "Missing URL." }, 400);
+    if (!isSafeUrl(url)) return c.json({ ok: false, error: "URL is not allowed." }, 400);
+    const s = await safetyCheck(url);
+    return c.json({ ok: true, url, ...s });
+  });
+
   app.post("/api/scan/file", async (c) => {
-    const user = await currentUser(c);
-    if (!user) {
-      return c.json({ ok: false, error: "Sign in to use the download scanner." }, 401);
-    }
     const body = await c.req.json().catch(() => ({}));
     const url = (body.url || "").trim();
     if (!url) return c.json({ ok: false, error: "Missing URL." }, 400);
     const out = await scanDownload(url);
     return c.json(out);
+  });
+
+  app.post("/api/scan/upload", async (c) => {
+    try {
+      const form = await c.req.parseBody();
+      const file = form?.file;
+      if (!file || typeof file === "string") {
+        return c.json({ ok: false, error: "No file uploaded." }, 400);
+      }
+      const buf = Buffer.from(await file.arrayBuffer());
+      const name = file.name || "upload.bin";
+      const out = await scanBuffer(buf, name);
+      return c.json(out);
+    } catch (e) {
+      return c.json({ ok: false, error: String(e?.message || e) }, 400);
+    }
   });
 
   return app;

@@ -93,6 +93,7 @@
         <button data-tab="all" class="active" role="tab">All</button>
         <button data-tab="images" role="tab">Images</button>
         <button data-tab="news" role="tab">News</button>
+        <button data-tab="scan" role="tab">Scan</button>
       </nav>
 
       <main>
@@ -105,6 +106,57 @@
         <section id="results" class="results" role="region" aria-label="Search results"></section>
         <nav id="pager" class="pager" hidden></nav>
         <section id="images-grid" class="images-grid" hidden></section>
+
+        <!-- Scan tab: check any URL or upload a file for antivirus scanning
+             via VirusTotal. No login required. -->
+        <section id="scan-panel" class="scan-panel" hidden>
+          <div class="scan-intro">
+            <h2>VirusTotal scanner</h2>
+            <p class="hint">
+              Check a link or file against 70+ antivirus engines before you open it.
+              Nothing you scan is logged by Atomic.
+            </p>
+          </div>
+
+          <div class="scan-card">
+            <h3>Scan a URL</h3>
+            <form id="scan-url-form" class="scan-row">
+              <input id="scan-url-input" type="url" placeholder="https://suspicious-site.example/file.exe" required />
+              <button type="submit">Scan URL</button>
+            </form>
+            <div id="scan-url-result" class="scan-result" hidden></div>
+          </div>
+
+          <div class="scan-card">
+            <h3>Scan a file by URL</h3>
+            <p class="hint" style="margin-top: 0">
+              Downloads the file on our side, hashes it in memory (never written
+              to disk), and checks it against VirusTotal. 20 MB cap.
+            </p>
+            <form id="scan-filelink-form" class="scan-row">
+              <input id="scan-filelink-input" type="url" placeholder="https://example.com/installer.exe" required />
+              <button type="submit">Scan download</button>
+            </form>
+            <div id="scan-filelink-result" class="scan-result" hidden></div>
+          </div>
+
+          <div class="scan-card">
+            <h3>Upload a file</h3>
+            <p class="hint" style="margin-top: 0">
+              Drag a file in or pick one. 20 MB cap. The file is hashed in
+              memory and, if new to VirusTotal, submitted anonymously.
+            </p>
+            <form id="scan-upload-form" class="scan-row scan-drop" enctype="multipart/form-data">
+              <label id="scan-drop-label" class="scan-drop-label">
+                <input id="scan-upload-input" type="file" />
+                <span>Drop a file here or click to browse</span>
+              </label>
+              <button type="submit">Scan file</button>
+            </form>
+            <div id="scan-upload-result" class="scan-result" hidden></div>
+          </div>
+        </section>
+
         <div id="empty" class="empty" hidden>
           <p>No results.</p>
         </div>
@@ -130,18 +182,28 @@
               <div class="hint">Pick a look — your choice is stored locally only.</div>
             </div>
             <select id="theme">
-              <option value="atom-dark">Atom Dark</option>
-              <option value="atom-light">Atom Light</option>
-              <option value="google">Google Classic</option>
-              <option value="midnight">Midnight</option>
-              <option value="neon">Neon</option>
-              <option value="dracula">Dracula</option>
-              <option value="solar">Solar</option>
-              <option value="nord">Nord</option>
-              <option value="gruvbox">Gruvbox</option>
-              <option value="sunset">Sunset</option>
-              <option value="ocean">Ocean</option>
-              <option value="monokai">Monokai</option>
+              <optgroup label="Futuristic">
+                <option value="quantum">Quantum (neon grid)</option>
+                <option value="cyberpunk">Cyberpunk</option>
+                <option value="matrix">Matrix</option>
+                <option value="carbon">Carbon Pro</option>
+              </optgroup>
+              <optgroup label="Dark">
+                <option value="atom-dark">Atom Dark</option>
+                <option value="midnight">Midnight</option>
+                <option value="neon">Neon</option>
+                <option value="dracula">Dracula</option>
+                <option value="nord">Nord</option>
+                <option value="gruvbox">Gruvbox</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="monokai">Monokai</option>
+              </optgroup>
+              <optgroup label="Light">
+                <option value="atom-light">Atom Light</option>
+                <option value="google">Google Classic</option>
+                <option value="solar">Solar</option>
+              </optgroup>
             </select>
           </div>
 

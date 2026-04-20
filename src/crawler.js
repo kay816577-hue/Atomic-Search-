@@ -68,10 +68,45 @@ export async function crawlOne(url, { timeoutMs = 5000 } = {}) {
   }
 }
 
+// Trusted root URLs we seed the crawler with on cold boot if the index is
+// nearly empty. They're high-signal, broadly topical hubs — the crawler
+// expands from them via outbound links so within a few ticks we already
+// have thousands of pages to match queries against. Keeps "0 from Atomic"
+// rare for common searches even on a freshly-deployed Render instance.
+const SEED_URLS = [
+  "https://en.wikipedia.org/wiki/Main_Page",
+  "https://en.wikipedia.org/wiki/Special:Random",
+  "https://en.wikipedia.org/wiki/Computer_science",
+  "https://en.wikipedia.org/wiki/Science",
+  "https://en.wikipedia.org/wiki/Technology",
+  "https://en.wikipedia.org/wiki/History",
+  "https://en.wikipedia.org/wiki/Mathematics",
+  "https://en.wikipedia.org/wiki/Physics",
+  "https://en.wikipedia.org/wiki/Geography",
+  "https://news.ycombinator.com/",
+  "https://developer.mozilla.org/en-US/",
+  "https://www.github.com/trending",
+];
+
+async function seedIfEmpty() {
+  try {
+    const s = await stats();
+    // Only seed when we're effectively empty. Never re-seeds on a populated
+    // Render instance — the index snapshots restore and we pick up from there.
+    if ((s?.pages || 0) >= 50) return;
+    for (const u of SEED_URLS) {
+      try { await enqueueCrawl(normaliseUrl(u)); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+
 export function startCrawler(intervalMs = 5000) {
   if (typeof process === "undefined" || !process.versions?.node) return;
   if (running) return;
   running = true;
+  // Seed a few trusted hubs ~2s after boot so the crawler has something to
+  // chew on immediately and the index isn't stuck at 0 pages on first boot.
+  setTimeout(() => { seedIfEmpty().catch(() => {}); }, 2000).unref?.();
   const tick = async () => {
     let task = null;
     try {
@@ -94,9 +129,13 @@ export function startCrawler(intervalMs = 5000) {
       const host = hostFromUrl(url);
       await insertPage({ url: normaliseUrl(url), title, text, host });
       await dropFromQueue(url);
+      // Enqueue outbound links so the crawler naturally fans out and the
+      // Atomic index grows even without user-submitted URLs. Cap is tuned
+      // high enough to branch quickly but low enough that one spammy page
+      // can't flood the queue with 300 links.
       let queued = 0;
       for (const a of document.querySelectorAll("a[href]")) {
-        if (queued >= 20) break;
+        if (queued >= 40) break;
         const href = a.getAttribute("href");
         if (!href) continue;
         try {

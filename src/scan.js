@@ -17,8 +17,14 @@ const MAX_BYTES = 20 * 1024 * 1024; // 20 MiB
 const POLL_BUDGET_MS = 20 * 1000;
 const POLL_INTERVAL_MS = 2500;
 
+// Hardcoded VirusTotal fallback so the Scan tab works out of the box on any
+// deploy without env config. Env var (`VIRUSTOTAL_API_KEY`) always wins.
+// Kept in sync with safety.js — rotate in both places after your first deploy.
+const VT_FALLBACK_KEY = "4e713f00d6eac72ddf450e4759992687e9f1f8584905625a46828a8e16d9c8fd";
+
 function vtKey() {
-  return process.env.VIRUSTOTAL_API_KEY || process.env.VT_API_KEY || "";
+  if (typeof process === "undefined") return VT_FALLBACK_KEY;
+  return process.env?.VIRUSTOTAL_API_KEY || process.env?.VT_API_KEY || VT_FALLBACK_KEY;
 }
 
 async function fetchBytes(url) {
@@ -117,6 +123,27 @@ async function vtPollAnalysis(analysisId) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
   return { status: "pending" };
+}
+
+// Scan an arbitrary file buffer via VirusTotal — used by the /api/scan/upload
+// endpoint when the user drops a file directly in the Scan tab. Does the same
+// hash-first lookup as scanDownload so already-known files return instantly.
+export async function scanBuffer(buf, name = "upload.bin") {
+  if (!vtKey()) return { ok: false, error: "VirusTotal isn't configured on this server." };
+  if (!buf || !buf.length) return { ok: false, error: "empty-file" };
+  if (buf.length > MAX_BYTES) return { ok: false, error: "file-too-large" };
+
+  const h = hashes(buf);
+  const lookup = await vtFileLookup(h.sha256);
+  if (lookup?.status === "known") {
+    return { ok: true, hashes: h, size: buf.length, name, ...lookup };
+  }
+  const submit = await vtSubmit(buf, name);
+  if (!submit?.analysisId) {
+    return { ok: true, hashes: h, size: buf.length, name, verdict: "unknown", note: "Could not submit to VirusTotal." };
+  }
+  const analysis = await vtPollAnalysis(submit.analysisId);
+  return { ok: true, hashes: h, size: buf.length, name, ...analysis };
 }
 
 export async function scanDownload(url) {

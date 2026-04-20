@@ -268,6 +268,122 @@
   --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* — Futuristic themes added per request. They lean into neon/glass/grid
+   aesthetics while still using the same token surface so styles.css needs
+   no theme-specific branches. "quantum" is the flagship futuristic look. */
+
+[data-theme="quantum"] {
+  --bg: #05060d;
+  --bg-elev: #0a0c18;
+  --bg-elev-1: #0f1224;
+  --bg-elev-2: #141833;
+  --text: #e6f1ff;
+  --text-dim: #8ba0c7;
+  --text-mute: #5d6a8f;
+  --accent: #00e5ff;
+  --accent-2: #ff4dff;
+  --border: #1a1f45;
+  --border-soft: #10132f;
+  --danger: #ff5c8a;
+  --warn: #ffb86b;
+  --ok: #3dffbb;
+  --link: #7ff1ff;
+  --link-visited: #ff9df0;
+  --ring: rgba(0, 229, 255, 0.55);
+  --shadow: 0 0 60px rgba(0, 229, 255, 0.18), 0 0 120px rgba(255, 77, 255, 0.12);
+  --shadow-soft: 0 0 24px rgba(0, 229, 255, 0.22);
+}
+
+[data-theme="carbon"] {
+  /* Minimal pro monochrome: pure blacks, crisp whites, single cyan accent.
+     Designed to look like a high-end terminal or enterprise dashboard. */
+  --bg: #0a0a0a;
+  --bg-elev: #111111;
+  --bg-elev-1: #171717;
+  --bg-elev-2: #1e1e1e;
+  --text: #f5f5f5;
+  --text-dim: #a3a3a3;
+  --text-mute: #737373;
+  --accent: #0ea5e9;
+  --accent-2: #f5f5f5;
+  --border: #262626;
+  --border-soft: #1c1c1c;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #22c55e;
+  --link: #60a5fa;
+  --link-visited: #d4d4d4;
+  --ring: rgba(14, 165, 233, 0.38);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="matrix"] {
+  --bg: #000800;
+  --bg-elev: #031d05;
+  --bg-elev-1: #052d07;
+  --bg-elev-2: #08400b;
+  --text: #bffcc3;
+  --text-dim: #7bd389;
+  --text-mute: #4a8a55;
+  --accent: #00ff66;
+  --accent-2: #65ffa9;
+  --border: #0a4f10;
+  --border-soft: #063008;
+  --danger: #ff5555;
+  --warn: #ffd866;
+  --ok: #00ff66;
+  --link: #5eff9f;
+  --link-visited: #c1ffc9;
+  --ring: rgba(0, 255, 102, 0.45);
+  --shadow: 0 0 60px rgba(0, 255, 102, 0.18);
+  --shadow-soft: 0 0 16px rgba(0, 255, 102, 0.2);
+}
+
+[data-theme="cyberpunk"] {
+  --bg: #0d0221;
+  --bg-elev: #190634;
+  --bg-elev-1: #240a47;
+  --bg-elev-2: #2e0f5a;
+  --text: #fef9ff;
+  --text-dim: #d5b4ff;
+  --text-mute: #9f79d1;
+  --accent: #ffea00;
+  --accent-2: #ff2a6d;
+  --border: #2e0f5a;
+  --border-soft: #240a47;
+  --danger: #ff2a6d;
+  --warn: #ffea00;
+  --ok: #05d9e8;
+  --link: #05d9e8;
+  --link-visited: #ff2a6d;
+  --ring: rgba(255, 234, 0, 0.45);
+  --shadow: 0 0 50px rgba(255, 42, 109, 0.25), 0 0 100px rgba(5, 217, 232, 0.12);
+  --shadow-soft: 0 0 20px rgba(255, 42, 109, 0.22);
+}
+
+/* Quantum-specific flourish: animated grid background behind the home view
+   and results shell so the futuristic theme doesn't just look like a
+   recolour. Pure CSS, GPU-cheap, respects prefers-reduced-motion. */
+body[data-theme="quantum"],
+body[data-theme="cyberpunk"] {
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 77, 255, 0.045) 1px, transparent 1px);
+  background-size: 40px 40px, 40px 40px;
+  background-position: 0 0, 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="quantum"],
+  body[data-theme="cyberpunk"] {
+    animation: atomic-grid-drift 32s linear infinite;
+  }
+}
+@keyframes atomic-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 40px 40px, -40px 40px; }
+}
+
 /* Respect OS dark-mode when the user hasn't set a theme yet. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {

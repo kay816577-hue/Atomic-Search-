@@ -92,16 +92,162 @@
       .catch(function () {});
   }
 
+  /* ---------------- Scan tab ---------------- */
+  // Shared verdict renderer: draws a colour-coded card summarising a VT
+  // response. Works for URL scans, file-URL scans, and direct uploads.
+  function renderVerdict(target, data) {
+    if (!target) return;
+    target.hidden = false;
+    if (!data || data.ok === false) {
+      target.className = "scan-result scan-err";
+      target.textContent = (data && data.error) || "Scan failed.";
+      return;
+    }
+    var verdict = (data.verdict || data.status || "unknown").toLowerCase();
+    var cls = "scan-unknown";
+    if (verdict === "clean" || verdict === "harmless") cls = "scan-ok";
+    else if (verdict === "suspicious") cls = "scan-warn";
+    else if (verdict === "malicious") cls = "scan-bad";
+    else if (verdict === "pending" || verdict === "queued") cls = "scan-pending";
+    target.className = "scan-result " + cls;
+
+    var lines = [];
+    lines.push('<div class="scan-verdict">' + esc(verdict.toUpperCase()) + "</div>");
+    if (data.malicious != null) {
+      lines.push(
+        '<div class="scan-stats">' +
+          '<span>' + (data.malicious | 0) + " malicious</span>" +
+          '<span>' + (data.suspicious | 0) + " suspicious</span>" +
+          '<span>' + (data.harmless | 0) + " harmless</span>" +
+          '<span>' + (data.undetected | 0) + " undetected</span>" +
+        "</div>"
+      );
+    }
+    if (data.name) lines.push('<div class="scan-meta">' + esc(data.name) + (data.size ? " \u00b7 " + humanSize(data.size) : "") + "</div>");
+    else if (data.url) lines.push('<div class="scan-meta">' + esc(data.url) + "</div>");
+    if (data.hashes && data.hashes.sha256) {
+      lines.push('<div class="scan-hash">sha256: ' + esc(data.hashes.sha256) + "</div>");
+    }
+    if (data.permalink) {
+      lines.push('<div class="scan-link"><a href="' + esc(data.permalink) + '" target="_blank" rel="noreferrer noopener">View full VirusTotal report \u2197</a></div>');
+    }
+    if (data.note) lines.push('<div class="hint" style="margin-top:8px">' + esc(data.note) + "</div>");
+    target.innerHTML = lines.join("");
+  }
+
+  function humanSize(n) {
+    if (!n) return "";
+    var units = ["B", "KB", "MB", "GB"];
+    var i = 0; var v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(v < 10 && i > 0 ? 1 : 0) + " " + units[i];
+  }
+
+  function bindScan() {
+    var urlForm = $("scan-url-form");
+    if (urlForm) {
+      urlForm.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var url = ($("scan-url-input").value || "").trim();
+        if (!url) return;
+        var out = $("scan-url-result");
+        out.hidden = false;
+        out.className = "scan-result scan-pending";
+        out.textContent = "Checking \u2026";
+        try {
+          var res = await fetch("/api/scan/url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: url }),
+          });
+          renderVerdict(out, await res.json());
+        } catch (err) {
+          renderVerdict(out, { ok: false, error: "Network error." });
+        }
+      });
+    }
+
+    var fileLinkForm = $("scan-filelink-form");
+    if (fileLinkForm) {
+      fileLinkForm.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var url = ($("scan-filelink-input").value || "").trim();
+        if (!url) return;
+        var out = $("scan-filelink-result");
+        out.hidden = false;
+        out.className = "scan-result scan-pending";
+        out.textContent = "Downloading & scanning \u2026 (this can take up to 25s)";
+        try {
+          var res = await fetch("/api/scan/file", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: url }),
+          });
+          renderVerdict(out, await res.json());
+        } catch (err) {
+          renderVerdict(out, { ok: false, error: "Network error." });
+        }
+      });
+    }
+
+    var uploadForm = $("scan-upload-form");
+    var uploadInput = $("scan-upload-input");
+    var dropLabel = $("scan-drop-label");
+    if (dropLabel && uploadInput) {
+      ["dragenter", "dragover"].forEach(function (ev) {
+        dropLabel.addEventListener(ev, function (e) {
+          e.preventDefault(); e.stopPropagation();
+          dropLabel.classList.add("drag");
+        });
+      });
+      ["dragleave", "drop"].forEach(function (ev) {
+        dropLabel.addEventListener(ev, function (e) {
+          e.preventDefault(); e.stopPropagation();
+          dropLabel.classList.remove("drag");
+        });
+      });
+      dropLabel.addEventListener("drop", function (e) {
+        var dt = e.dataTransfer;
+        if (dt && dt.files && dt.files[0]) uploadInput.files = dt.files;
+      });
+    }
+    if (uploadForm) {
+      uploadForm.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var out = $("scan-upload-result");
+        var file = uploadInput && uploadInput.files && uploadInput.files[0];
+        if (!file) { renderVerdict(out, { ok: false, error: "Pick a file first." }); return; }
+        out.hidden = false;
+        out.className = "scan-result scan-pending";
+        out.textContent = "Uploading & scanning \u2026";
+        try {
+          var form = new FormData();
+          form.append("file", file);
+          var res = await fetch("/api/scan/upload", { method: "POST", body: form });
+          renderVerdict(out, await res.json());
+        } catch (err) {
+          renderVerdict(out, { ok: false, error: "Network error." });
+        }
+      });
+    }
+  }
+
   /* ---------------- Search ---------------- */
   function setTab(t) {
     state.tab = t || "all";
     Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function (b) {
       b.classList.toggle("active", b.getAttribute("data-tab") === state.tab);
     });
-    $("results").hidden = state.tab !== "all" && state.tab !== "news";
-    $("pager").hidden = $("results").hidden;
+    var isSearchTab = state.tab === "all" || state.tab === "news";
+    $("results").hidden = !isSearchTab;
+    $("pager").hidden = !isSearchTab;
     $("images-grid").hidden = state.tab !== "images";
+    var scanEl = $("scan-panel");
+    if (scanEl) scanEl.hidden = state.tab !== "scan";
+    // Results-chip + meta only make sense on search tabs. Hide them on scan/images.
+    var chip = $("index-chip"); if (chip && !isSearchTab && state.tab !== "scan") chip.hidden = true;
     $("empty").hidden = true;
+    if (state.tab === "scan") return; // scan tab doesn't use the query
     if (!state.q) return;
     if (state.tab === "images") doImages(state.q);
     else doSearch(state.q);
@@ -424,6 +570,8 @@
     Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function (b) {
       b.addEventListener("click", function () { setTab(b.getAttribute("data-tab")); });
     });
+
+    bindScan();
 
     // Forms.
     function submitQuery(q) {

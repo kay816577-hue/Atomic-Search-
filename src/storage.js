@@ -237,9 +237,11 @@ export async function searchPages(q, limit = 20) {
     .filter((t) => t.length >= 2)
     .slice(0, 6);
   if (!terms.length) return [];
-  // Match if EVERY token appears in title OR text. Avoids giant OR fan-outs
-  // while still catching partial matches across title+body.
-  const where = terms.map(() => `(LOWER(title) LIKE ? OR LOWER(text) LIKE ?)`).join(" AND ");
+  // OR match in SQL (broad recall), then post-filter by coverage. This lets
+  // pages indexed from a related query still surface — e.g. a page indexed
+  // for "raft consensus" still matches "raft algorithm" because two of the
+  // three tokens match. Short queries still require exact coverage.
+  const where = terms.map(() => `(LOWER(title) LIKE ? OR LOWER(text) LIKE ?)`).join(" OR ");
   const params = [];
   for (const t of terms) {
     const like = `%${t}%`;
@@ -251,8 +253,20 @@ export async function searchPages(q, limit = 20) {
        WHERE ${where}
        ORDER BY indexed_at DESC LIMIT ?`
     )
-    .all(...params, limit);
-  return rows;
+    .all(...params, limit * 4);
+  const minHits = terms.length <= 2 ? terms.length : Math.ceil(terms.length * 0.6);
+  const filtered = [];
+  for (const r of rows) {
+    const t = (r.title || "").toLowerCase();
+    const b = (r.text || "").toLowerCase();
+    let hits = 0;
+    for (const term of terms) {
+      if (t.includes(term) || b.includes(term)) hits += 1;
+    }
+    if (hits >= minHits) filtered.push(r);
+    if (filtered.length >= limit) break;
+  }
+  return filtered;
 }
 
 export async function addSubmission(url) {

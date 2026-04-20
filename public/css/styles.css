@@ -641,3 +641,72 @@ main {
 
 /* Safety interstitial uses the same theme tokens. */
 body.interstitial { background: var(--bg); color: var(--text); }
+
+/* ---------------- Scan tab ---------------- */
+.scan-panel { max-width: 760px; margin: 0 auto; padding: 8px 0 40px; }
+.scan-intro h2 {
+  margin: 8px 0 6px; font-size: 24px; font-weight: 600;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.scan-card {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin: 14px 0;
+  box-shadow: var(--shadow-soft);
+}
+.scan-card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.scan-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.scan-row input[type="url"] {
+  flex: 1; min-width: 220px;
+  background: var(--bg-elev-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; font-size: 14px;
+}
+.scan-row input[type="url"]:focus { outline: none; box-shadow: 0 0 0 3px var(--ring); border-color: var(--accent); }
+.scan-row button {
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 10px; padding: 10px 18px; font-weight: 600;
+  cursor: pointer; transition: transform 0.12s ease;
+}
+.scan-row button:hover { transform: translateY(-1px); }
+
+.scan-drop { flex-direction: column; align-items: stretch; }
+.scan-drop-label {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 110px; border: 2px dashed var(--border);
+  border-radius: 12px; cursor: pointer; color: var(--text-dim);
+  background: var(--bg-elev-2); transition: border-color 0.15s, background 0.15s;
+  text-align: center; padding: 12px; font-size: 14px;
+}
+.scan-drop-label input[type="file"] { display: none; }
+.scan-drop-label.drag,
+.scan-drop-label:hover { border-color: var(--accent); background: var(--bg-elev-1); color: var(--text); }
+.scan-drop button { align-self: flex-end; }
+
+.scan-result {
+  margin-top: 12px; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg-elev-2);
+  font-size: 14px; line-height: 1.5;
+}
+.scan-verdict { font-weight: 700; letter-spacing: 0.04em; font-size: 13px; margin-bottom: 8px; }
+.scan-stats { display: flex; flex-wrap: wrap; gap: 12px; color: var(--text-dim); font-size: 13px; margin-bottom: 6px; }
+.scan-meta, .scan-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: var(--text-mute); word-break: break-all;
+  margin-top: 4px;
+}
+.scan-link { margin-top: 8px; font-size: 13px; }
+.scan-link a { color: var(--link); text-decoration: none; }
+.scan-link a:hover { text-decoration: underline; }
+.scan-ok { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok) inset; }
+.scan-ok .scan-verdict { color: var(--ok); }
+.scan-warn { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn) inset; }
+.scan-warn .scan-verdict { color: var(--warn); }
+.scan-bad { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger) inset; }
+.scan-bad .scan-verdict { color: var(--danger); }
+.scan-pending, .scan-unknown { border-style: dashed; color: var(--text-dim); }
+.scan-err { border-color: var(--danger); color: var(--danger); }
