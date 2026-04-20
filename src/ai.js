@@ -141,8 +141,56 @@ function withTimeout(p, ms) {
   });
 }
 
+// Synthesise a coherent prose answer from the highest-relevance sentences in
+// the aggregated results. We prefer own-index rows because they carry real
+// body text (~4000 chars) versus meta snippets (~240 chars), which lets us
+// produce a proper multi-sentence answer rather than a bullet list of titles.
+function synthesise(query, results) {
+  const qTokens = tokenize(query);
+  const pool = [];
+  // Pass 1: own-index rows first, with their full body text.
+  for (const r of results.slice(0, 16)) {
+    const body = r.text || r.snippet || "";
+    const text = `${r.title || ""}. ${body}`;
+    for (const s of sentencesFrom(text)) {
+      const score = overlap(qTokens, tokenize(s));
+      pool.push({ s, score: score + (r.ownIndex ? 1 : 0), host: r.host, url: r.url, ownIndex: !!r.ownIndex });
+    }
+  }
+  pool.sort((a, b) => b.score - a.score);
+  const picked = [];
+  const seen = new Set();
+  const hosts = new Set();
+  for (const x of pool) {
+    const norm = x.s.replace(/\s+/g, " ").toLowerCase();
+    if (seen.has(norm.slice(0, 80))) continue;
+    seen.add(norm.slice(0, 80));
+    picked.push(x);
+    hosts.add(x.host);
+    if (picked.length >= 4) break;
+  }
+  if (!picked.length) return null;
+
+  // Stitch into a single paragraph, trailing each fact with its source index.
+  const sourceIndex = new Map();
+  const sources = [];
+  for (const p of picked) {
+    if (!sourceIndex.has(p.url)) {
+      sourceIndex.set(p.url, sources.length + 1);
+      sources.push({ n: sources.length + 1, title: p.s.slice(0, 60), url: p.url, host: p.host });
+    }
+  }
+  const prose = picked
+    .map((p) => {
+      const trimmed = p.s.replace(/\s+$/g, "").replace(/[.!?]+$/, "");
+      return `${trimmed} [${sourceIndex.get(p.url)}].`;
+    })
+    .join(" ");
+  return { answer: prose, sources };
+}
+
 export async function aiAnswer(query, results) {
-  const sources = results.slice(0, 8).map((r, i) => ({
+  const baseSources = results.slice(0, 8).map((r, i) => ({
     n: i + 1,
     title: r.title,
     url: r.url,
@@ -158,21 +206,32 @@ export async function aiAnswer(query, results) {
     })(),
     12000
   );
+  if (llm) return { query, mode: "llm", answer: llm, sources: baseSources };
 
-  let extract = extractiveSummary(query, results, 5);
-  if (extract.length < 2) {
-    // Fallback: use titles when snippets are sparse — guarantees non-empty.
-    extract = titlesSummary(query, results, 5);
+  // No LLM — produce a real synthesised answer from the top snippets.
+  const synth = synthesise(query, results);
+  if (synth) {
+    return {
+      query,
+      mode: "synthesis",
+      answer: synth.answer,
+      sources: synth.sources.length ? synth.sources : baseSources,
+    };
   }
-  const bullets = extract.map((s) => `• ${s.s}${s.host ? "  (" + s.host + ")" : ""}`);
-  const fallback = bullets.length
-    ? `Here's what the top sources say about "${query}":\n\n${bullets.join("\n")}`
-    : `No strong signal found for "${query}". Try rephrasing or switching tabs.`;
+
+  // Last resort — titles-only when everything else is empty.
+  const titles = titlesSummary(query, results, 5);
+  if (titles.length) {
+    const answer = `Based on the top results, ${titles
+      .map((t) => t.s)
+      .join("; ")}.`;
+    return { query, mode: "synthesis", answer, sources: baseSources };
+  }
 
   return {
     query,
-    mode: llm ? "llm" : "extractive",
-    answer: llm || fallback,
-    sources,
+    mode: "synthesis",
+    answer: `No strong signal found for "${query}". Try rephrasing.`,
+    sources: baseSources,
   };
 }

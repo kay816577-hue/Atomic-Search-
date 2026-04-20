@@ -335,6 +335,50 @@ main {
 }
 .images-grid a:hover .caption { opacity: 1; }
 
+/* ---------------- Pinned Atomic answer (on repeat searches) ---------------- */
+.atomic-answer {
+  position: relative;
+  background: linear-gradient(135deg, var(--bg-elev), var(--bg-elev-2, var(--bg-elev)));
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin: 4px 0 22px;
+  box-shadow: var(--shadow-soft);
+}
+.atomic-answer-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.atomic-answer-badge {
+  background: var(--accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.atomic-answer-mode, .atomic-answer-hits {
+  color: var(--text-mute);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.atomic-answer-text {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0;
+}
+.atomic-answer-sources {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  display: flex; flex-wrap: wrap; gap: 8px 12px;
+}
+.atomic-answer-sources a { color: var(--text-dim); }
+
 /* ---------------- AI summary ---------------- */
 .ai-summary {
   background: var(--bg-elev);

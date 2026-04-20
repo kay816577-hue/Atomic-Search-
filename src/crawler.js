@@ -9,6 +9,32 @@ import { isSafeUrl } from "./safeurl.js";
 
 let running = false;
 
+// Eager, synchronous-ish crawl used by /api/search so that the very first
+// time a query is made, we still index the winning pages immediately (rather
+// than waiting for the 5s background tick). Bounded timeout so a slow site
+// never blocks the caller. Safe to fire-and-forget.
+export async function crawlOne(url, { timeoutMs = 5000 } = {}) {
+  if (typeof process === "undefined" || !process.versions?.node) return false;
+  if (!isSafeUrl(url)) return false;
+  try {
+    const res = await privateFetch(url, { timeout: timeoutMs });
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("text/html")) return false;
+    const html = (await res.text()).slice(0, 500_000);
+    const { document } = parseHTML(html);
+    const title = stripTags(document.querySelector("title")?.textContent || url);
+    const text = stripTags(
+      [...document.querySelectorAll("p, h1, h2, h3, li")]
+        .slice(0, 80)
+        .map((n) => n.textContent)
+        .join(" ")
+    ).slice(0, 4000);
+    const host = hostFromUrl(url);
+    await insertPage({ url: normaliseUrl(url), title, text, host });
+    return true;
+  } catch { return false; }
+}
+
 export function startCrawler(intervalMs = 5000) {
   if (typeof process === "undefined" || !process.versions?.node) return;
   if (running) return;

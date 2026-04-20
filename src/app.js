@@ -16,10 +16,13 @@ import {
   addSubmission,
   enqueueCrawl,
   stats as storageStats,
+  getAnswer,
+  putAnswer,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { buildAuthRoutes, currentUser } from "./auth.js";
 import { scanDownload } from "./scan.js";
+import { crawlOne } from "./crawler.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
@@ -34,19 +37,40 @@ function privacyHeaders() {
   };
 }
 
-// Fire-and-forget: enqueue top result URLs for our own crawler so the index
-// genuinely grows as people search. Capped per call so we never blow up the
-// queue on a single hit.
-function growIndex(results, cap = 12) {
+// Fire-and-forget: eagerly crawl the top result URLs in parallel so the
+// Atomic index grows on every search (instead of waiting 5s per tick), and
+// enqueue the rest for the background crawler to pick up.
+function growIndex(results, { eager = 5, queueCap = 20 } = {}) {
   try {
-    const picks = (results || []).slice(0, cap);
-    for (const r of picks) {
-      if (!r?.url) continue;
-      if (!isSafeUrl(r.url)) continue;
-      // SQLite queue is Node-only; on Workers this no-ops.
-      enqueueCrawl(r.url).catch(() => {});
+    const urls = (results || [])
+      .map((r) => r?.url)
+      .filter((u) => u && isSafeUrl(u));
+    // Eager: crawl top N now, in parallel, each bounded by 5s.
+    const head = urls.slice(0, eager);
+    for (const u of head) {
+      crawlOne(u, { timeoutMs: 5000 }).catch(() => {});
+    }
+    // Rest: queue for the background crawler.
+    for (const u of urls.slice(eager, queueCap)) {
+      enqueueCrawl(u).catch(() => {});
     }
   } catch { /* ignore */ }
+}
+
+// Fire-and-forget AI synthesis so repeat searches for the same query surface
+// a pinned "Atomic answer" card. Runs after the response has been sent so
+// the user never waits on it.
+function rememberAnswer(query, results) {
+  (async () => {
+    try {
+      const existing = await getAnswer(query);
+      if (existing) return; // already cached
+      const ai = await aiAnswer(query, results);
+      if (ai?.answer) {
+        await putAnswer(query, { answer: ai.answer, mode: ai.mode, sources: ai.sources });
+      }
+    } catch { /* ignore */ }
+  })();
 }
 
 // Score an own-index row against the query so we can boost strong matches
@@ -91,16 +115,22 @@ export function buildApp() {
     const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
     const cached = await cacheGet(key);
-    if (cached) return c.json({ ...cached, cached: true });
+    if (cached) {
+      // Even on cache hit, attach the latest cached answer (it may have been
+      // synthesised after this search entry was stored).
+      const atomicAnswer = page === 1 ? await getAnswer(q).catch(() => null) : null;
+      return c.json({ ...cached, cached: true, atomicAnswer });
+    }
 
     // Own-index matches — fetched on every page so strong in-index results
-    // always surface. Ranked and capped; only the top few are promoted.
+    // always surface underneath meta results.
     const ownRaw = await searchPages(q, 30).catch(() => []);
     const ownRanked = ownRaw
       .map((p) => ({
         url: p.url,
         host: p.host,
         title: p.title,
+        text: p.text, // full body so AI synthesis has something meaty to chew on
         snippet: (p.text || "").slice(0, 240),
         engines: ["atomic-index"],
         score: scoreOwnIndexRow(p, q),
@@ -111,24 +141,38 @@ export function buildApp() {
 
     const meta = await metaSearch(q, { page, perPage });
 
+    // Meta first (as the user requested), then any own-index row that wasn't
+    // already surfaced by the aggregators. Capped at `perPage`.
     const seen = new Set();
-    const promoted = [];
-    // On page 1 promote the top 5 own-index matches; on later pages keep any
-    // strong match (score >= 4) that wasn't surfaced yet.
-    const promoteLimit = page === 1 ? 5 : 12;
-    const threshold = page === 1 ? 0 : 4;
-    for (const r of ownRanked.slice(0, promoteLimit)) {
-      if (r.score < threshold) break;
+    const metaOrdered = [];
+    for (const r of meta.results) {
+      if (!r?.url || seen.has(r.url)) continue;
+      seen.add(r.url);
+      metaOrdered.push(r);
+    }
+    const ownTail = [];
+    const ownCap = page === 1 ? 10 : 20;
+    for (const r of ownRanked.slice(0, ownCap)) {
       if (seen.has(r.url)) continue;
       seen.add(r.url);
-      promoted.push(r);
+      ownTail.push(r);
     }
-    const metaFiltered = meta.results.filter((r) => !seen.has(r.url));
 
-    const merged = [...promoted, ...metaFiltered].slice(0, perPage);
-    const out = { ...meta, results: merged, ownIndexCount: promoted.length };
-    await cacheSet(key, out, SEARCH_TTL);
+    const merged = [...metaOrdered, ...ownTail].slice(0, perPage);
+
+    // Pinned answer card — only on page 1, only if we already synthesised one
+    // for this exact query on a previous search.
+    const atomicAnswer = page === 1 ? await getAnswer(q).catch(() => null) : null;
+
+    const out = {
+      ...meta,
+      results: merged,
+      ownIndexCount: ownTail.length,
+      atomicAnswer,
+    };
+    await cacheSet(key, { ...out, atomicAnswer: undefined }, SEARCH_TTL);
     growIndex(merged);
+    rememberAnswer(q, merged);
     return c.json(out);
   });
 
@@ -144,39 +188,40 @@ export function buildApp() {
   });
 
   // AI endpoint — opt-in. Clients only hit this when the user has AI enabled.
-  app.post("/api/ai", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const q = (body.q || c.req.query("q") || "").trim();
-    if (!q) return c.json({ query: "", answer: "", sources: [] });
+  async function computeAi(q) {
+    if (!q) return { query: "", answer: "", sources: [] };
+    // Short-circuit with the cached answer if we already synthesised one.
+    const prior = await getAnswer(q).catch(() => null);
+    if (prior?.answer) {
+      return { query: q, mode: prior.mode || "synthesis", answer: prior.answer, sources: prior.sources || [], cached: true };
+    }
     // Reuse the page-1 search cache if present — avoids a second full fan-out.
     const cacheKey = `search:${q.toLowerCase()}:p1:n50`;
     const cached = await cacheGet(cacheKey);
     let results;
     if (cached?.results?.length) {
-      results = cached.results;
+      // Re-hydrate own-index bodies so synthesis has the full page text.
+      const own = await searchPages(q, 10).catch(() => []);
+      const byUrl = new Map(own.map((p) => [p.url, p]));
+      results = cached.results.map((r) => (byUrl.has(r.url) ? { ...r, text: byUrl.get(r.url).text, ownIndex: true } : r));
     } else {
       const search = await metaSearch(q, { page: 1, perPage: 50 });
       await cacheSet(cacheKey, search, SEARCH_TTL);
       results = search.results;
     }
-    const answer = await aiAnswer(q, results);
-    return c.json(answer);
+    const ai = await aiAnswer(q, results);
+    if (ai?.answer) await putAnswer(q, { answer: ai.answer, mode: ai.mode, sources: ai.sources }).catch(() => {});
+    return ai;
+  }
+  app.post("/api/ai", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const q = (body.q || c.req.query("q") || "").trim();
+    return c.json(await computeAi(q));
   });
   // GET alias so the frontend can use a simple fetch + no preflight.
   app.get("/api/ai", async (c) => {
     const q = (c.req.query("q") || "").trim();
-    if (!q) return c.json({ query: "", answer: "", sources: [] });
-    const cacheKey = `search:${q.toLowerCase()}:p1:n50`;
-    const cached = await cacheGet(cacheKey);
-    let results;
-    if (cached?.results?.length) {
-      results = cached.results;
-    } else {
-      const search = await metaSearch(q, { page: 1, perPage: 50 });
-      await cacheSet(cacheKey, search, SEARCH_TTL);
-      results = search.results;
-    }
-    return c.json(await aiAnswer(q, results));
+    return c.json(await computeAi(q));
   });
 
   app.post("/api/submit", async (c) => {

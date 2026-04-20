@@ -84,6 +84,14 @@ async function tryLoadSqlite() {
         last_login INTEGER
       );
       CREATE INDEX IF NOT EXISTS users_email_idx ON users(email);
+      CREATE TABLE IF NOT EXISTS answers (
+        q TEXT PRIMARY KEY,
+        answer TEXT NOT NULL,
+        mode TEXT,
+        sources TEXT,
+        created_at INTEGER,
+        hit_count INTEGER DEFAULT 1
+      );
     `);
     sqlite = true;
     return true;
@@ -227,6 +235,46 @@ export async function getUserByEmail(email) {
 }
 
 let _memUsers = null;
+let _memAnswers = null;
+
+function normaliseQuery(q) {
+  return (q || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Answer cache — key is the normalised query. Stored verbatim so repeat
+// searches surface a pinned "Atomic answer" card before any meta results.
+export async function getAnswer(q) {
+  const key = normaliseQuery(q);
+  if (!key) return null;
+  if (await tryLoadSqlite()) {
+    const row = db.prepare("SELECT answer, mode, sources, created_at, hit_count FROM answers WHERE q = ?").get(key);
+    if (!row) return null;
+    db.prepare("UPDATE answers SET hit_count = hit_count + 1 WHERE q = ?").run(key);
+    let sources = [];
+    try { sources = JSON.parse(row.sources || "[]"); } catch { /* ignore */ }
+    return { query: q, answer: row.answer, mode: row.mode || "synthesis", sources, createdAt: row.created_at, hitCount: (row.hit_count || 0) + 1 };
+  }
+  if (!_memAnswers) return null;
+  const row = _memAnswers.get(key);
+  if (!row) return null;
+  row.hitCount = (row.hitCount || 0) + 1;
+  return { ...row, query: q };
+}
+
+export async function putAnswer(q, { answer, mode, sources }) {
+  const key = normaliseQuery(q);
+  if (!key || !answer) return false;
+  if (await tryLoadSqlite()) {
+    db.prepare(
+      "INSERT INTO answers(q, answer, mode, sources, created_at, hit_count) VALUES(?, ?, ?, ?, ?, 1) " +
+      "ON CONFLICT(q) DO UPDATE SET answer=excluded.answer, mode=excluded.mode, sources=excluded.sources, created_at=excluded.created_at"
+    ).run(key, answer, mode || "synthesis", JSON.stringify(sources || []), now());
+    return true;
+  }
+  _memAnswers = _memAnswers || new Map();
+  _memAnswers.set(key, { answer, mode: mode || "synthesis", sources: sources || [], createdAt: now(), hitCount: 1 });
+  return true;
+}
 
 export async function stats() {
   const base = { cacheEntries: lru.size(), persistent: false, pages: 0, queue: 0 };

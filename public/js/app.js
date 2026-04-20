@@ -118,11 +118,30 @@
       "<span>" + ownCount + " from Atomic index</span>";
 
     $("results").hidden = false;
-    $("results").innerHTML = results.map(renderResult).join("");
+    var pinned = data.atomicAnswer ? renderAtomicAnswer(data.atomicAnswer) : "";
+    $("results").innerHTML = pinned + results.map(renderResult).join("");
     renderPager(data);
 
     // Lazy-fetch safety verdicts in batches of 10.
     if (settings.safety) lazyLoadSafety(results);
+  }
+
+  function renderAtomicAnswer(a) {
+    if (!a || !a.answer) return "";
+    var srcs = (a.sources || []).map(function (s, i) {
+      return '<a href="' + esc(linkFor(s.url)) + '" target="_top" rel="noreferrer noopener">[' + (i + 1) + '] ' + esc(s.host || s.title || s.url) + "</a>";
+    }).join(" ");
+    return (
+      '<article class="atomic-answer">' +
+      '  <div class="atomic-answer-head">' +
+      '    <span class="atomic-answer-badge">Atomic answer</span>' +
+      '    <span class="atomic-answer-mode">' + esc(a.mode || "synthesis") + "</span>" +
+      (a.hitCount ? '    <span class="atomic-answer-hits">seen ' + a.hitCount + " ×</span>" : "") +
+      "  </div>" +
+      '  <p class="atomic-answer-text">' + esc(a.answer).replace(/\n/g, "<br>") + "</p>" +
+      (srcs ? '<p class="atomic-answer-sources">' + srcs + "</p>" : "") +
+      "</article>"
+    );
   }
 
   function renderResult(r, i) {
