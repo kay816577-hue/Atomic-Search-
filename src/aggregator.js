@@ -5,6 +5,7 @@
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
+import { isNsfwResult, isNsfwText } from "./nsfw.js";
 
 // Internal engine ids are used only for RRF / debugging. They are never
 // leaked to the client (the /api/search response reports results as sourced
@@ -377,6 +378,11 @@ export async function metaSearch(q, opts = {}) {
   if (!q || !q.trim()) {
     return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0 };
   }
+  // Refuse adult-intent queries up front. Nothing is even dispatched to
+  // upstream engines. Callers can see `filtered: true` on the response.
+  if (isNsfwText(q)) {
+    return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0, filtered: true };
+  }
   const query = q.trim().slice(0, 256);
   const page = Math.max(1, Number(opts.page) || 1);
   const pagesPerEngine = Math.max(1, Math.min(5, Number(opts.pagesPerEngine) || ENGINE_PAGES_PER_META));
@@ -452,6 +458,10 @@ export async function metaSearch(q, opts = {}) {
     ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
     score: Math.round(r.score * 1000) / 1000,
   }));
+  // Defense-in-depth NSFW filter. Even though the search endpoint also
+  // filters, upstream engines occasionally leak adult content on otherwise
+  // innocent queries — strip them here too.
+  merged = merged.filter((r) => !isNsfwResult(r));
 
   // Relevance filter: for multi-token queries, drop results where NEITHER
   // the title nor the snippet covers enough of the query. This kills the

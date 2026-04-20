@@ -14,6 +14,7 @@ import {
   stats,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
+import { isNsfwUrl, isNsfwText } from "./nsfw.js";
 
 let running = false;
 
@@ -38,6 +39,7 @@ function extract(html, url) {
 export async function crawlOne(url, { timeoutMs = 5000 } = {}) {
   if (typeof process === "undefined" || !process.versions?.node) return false;
   if (!isSafeUrl(url)) return false;
+  if (isNsfwUrl(url)) return false; // never index adult content
   const norm = normaliseUrl(url);
   try {
     const res = await privateFetch(url, { timeout: timeoutMs });
@@ -86,6 +88,9 @@ export function startCrawler(intervalMs = 5000) {
       if (!ct.includes("text/html")) { await dropFromQueue(url); return; }
       const html = (await res.text()).slice(0, 500_000);
       const { title, text, document } = extract(html, url);
+      // Content-level NSFW check — some benign-looking URLs host adult
+      // content. Drop without indexing if title or extracted text trips.
+      if (isNsfwText(title, text)) { await dropFromQueue(url); return; }
       const host = hostFromUrl(url);
       await insertPage({ url: normaliseUrl(url), title, text, host });
       await dropFromQueue(url);
@@ -97,6 +102,7 @@ export function startCrawler(intervalMs = 5000) {
         try {
           const abs = new URL(href, url).toString();
           if (!isSafeUrl(abs)) continue;
+          if (isNsfwUrl(abs)) continue;
           await enqueueCrawl(normaliseUrl(abs));
           queued++;
         } catch { /* ignore */ }

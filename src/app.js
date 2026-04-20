@@ -20,6 +20,7 @@ import { isSafeUrl } from "./safeurl.js";
 import { buildAuthRoutes, currentUser } from "./auth.js";
 import { scanDownload } from "./scan.js";
 import { crawlOne } from "./crawler.js";
+import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
@@ -36,12 +37,13 @@ function privacyHeaders() {
 
 // Fire-and-forget: eagerly crawl the top result URLs in parallel so the
 // Atomic index grows on every search (instead of waiting 5s per tick), and
-// enqueue the rest for the background crawler to pick up.
-function growIndex(results, { eager = 5, queueCap = 20 } = {}) {
+// enqueue the rest for the background crawler to pick up. NSFW URLs are
+// excluded from both the eager crawl and the queue — we never index them.
+function growIndex(results, { eager = 10, queueCap = 30 } = {}) {
   try {
     const urls = (results || [])
       .map((r) => r?.url)
-      .filter((u) => u && isSafeUrl(u));
+      .filter((u) => u && isSafeUrl(u) && !isNsfwUrl(u));
     // Eager: crawl top N now, in parallel, each bounded by 5s.
     const head = urls.slice(0, eager);
     for (const u of head) {
@@ -131,6 +133,19 @@ export function buildApp() {
   app.get("/api/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
     if (!q) return c.json({ query: "", results: [], page: 1, hasMore: false });
+    // NSFW-intent queries get zero results. This is deliberate and not a
+    // soft "safe search toggle" — the engine refuses to serve adult content
+    // in any mode.
+    if (isNsfwText(q)) {
+      return c.json({
+        query: q,
+        results: [],
+        page: 1,
+        hasMore: false,
+        filtered: true,
+        message: "Adult content is not served by Atomic Search.",
+      });
+    }
     const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
     const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
@@ -197,9 +212,12 @@ export function buildApp() {
       ownTail.push({ ...r, engines: ["atomic-index"] });
     }
 
-    const merged = [...metaOrdered, ...ownTail].slice(0, perPage);
+    // Drop NSFW results at the very end so nothing adult can leak through
+    // regardless of which engine surfaced it or whether it's an own-index row.
+    const nsfwSafe = [...metaOrdered, ...ownTail].filter((r) => !isNsfwResult(r));
+    const merged = nsfwSafe.slice(0, perPage);
     const ownIndexCount =
-      metaOrdered.filter((r) => r.ownIndex).length + ownTail.length;
+      merged.filter((r) => r.ownIndex).length;
 
     const out = { ...meta, results: merged, ownIndexCount };
     await cacheSet(key, out, SEARCH_TTL);

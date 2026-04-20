@@ -3,6 +3,7 @@
 
 import { parseHTML } from "linkedom";
 import { privateFetch, stripTags, uniqBy } from "./util.js";
+import { isNsfwText, isNsfwUrl } from "./nsfw.js";
 
 async function ddgImages(q) {
   try {
@@ -66,7 +67,17 @@ async function bingImages(q) {
 export async function metaImages(q) {
   if (!q || !q.trim()) return { results: [], query: q };
   const query = q.trim().slice(0, 256);
+  // Short-circuit: NSFW queries get an empty result set. We don't want to
+  // even hit upstream image engines with an adult query.
+  if (isNsfwText(query)) return { query, results: [], filtered: true };
   const [a, b] = await Promise.all([ddgImages(query), bingImages(query)]);
-  const merged = uniqBy([...a, ...b], (r) => r.image).slice(0, 60);
+  const merged = uniqBy([...a, ...b], (r) => r.image)
+    // Drop any NSFW-looking image (by source URL, image URL, or title).
+    .filter((r) => {
+      if (isNsfwUrl(r.image) || isNsfwUrl(r.source)) return false;
+      if (isNsfwText(r.title || "")) return false;
+      return true;
+    })
+    .slice(0, 60);
   return { query, results: merged };
 }
