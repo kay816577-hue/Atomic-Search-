@@ -123,7 +123,10 @@ export function buildApp() {
     }
 
     // Own-index matches — fetched on every page so strong in-index results
-    // always surface underneath meta results.
+    // always surface underneath meta results. We REQUIRE a title match so
+    // an unrelated page that merely mentions the query word in its body
+    // (e.g. hono.dev mentioning Google Fonts on a search for "google")
+    // never leaks into a different query's results.
     const ownRaw = await searchPages(q, 30).catch(() => []);
     const ownRanked = ownRaw
       .map((p) => ({
@@ -134,9 +137,15 @@ export function buildApp() {
         snippet: (p.text || "").slice(0, 240),
         engines: ["atomic-index"],
         score: scoreOwnIndexRow(p, q),
+        titleHit: (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
+          (q || "")
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((t) => t.length >= 2)
+            .every((t) => (p.title || "").toLowerCase().includes(t)),
         ownIndex: true,
       }))
-      .filter((r) => r.score > 0)
+      .filter((r) => r.titleHit && r.score >= 3)
       .sort((a, b) => b.score - a.score);
 
     const meta = await metaSearch(q, { page, perPage });
@@ -264,9 +273,12 @@ export function buildApp() {
     return c.json({ url, ...summary });
   });
 
-  // /go is a tiny interstitial page: looks up the URL safety verdict and
-  // shows a "Continue anonymously" button that routes the click through our
-  // /proxy. Works even if JS is disabled (the button is a plain anchor).
+  // /go is the click-through safety interstitial. It runs an instant VT
+  // lookup (cached verdict is ~1ms; fresh lookups under 400ms) and then
+  // offers the user two clearly-labelled choices:
+  //   • View via Atomic proxy — secure & private (IP hidden, cookies stripped)
+  //   • Open directly           — fast & reliable, leaks your IP to the site
+  // The page is framework-free HTML + a tiny inline script (no external JS).
   app.get("/go", async (c) => {
     const target = (c.req.query("url") || "").trim();
     if (!isSafeUrl(target)) {
@@ -278,48 +290,118 @@ export function buildApp() {
     }
     let host = target;
     try { host = new URL(target).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
-    const summary = await safetyCheck(target);
+
+    // Kick off the scan server-side so the HTML already has the verdict
+    // (cached → <1ms, uncached → ~300ms). If it takes longer than 600ms we
+    // serve the page with a "scanning…" state and let the browser refresh
+    // the verdict via /api/safety.
+    const scanStartedAt = Date.now();
+    const summaryOrNull = await Promise.race([
+      safetyCheck(target).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 600)),
+    ]);
+    const scanMs = Date.now() - scanStartedAt;
+    const summary = summaryOrNull || { verdict: "pending" };
     const verdict = summary.verdict || "unknown";
     const color = verdict === "clean" ? "#16a34a"
       : verdict === "suspicious" ? "#f59e0b"
       : verdict === "malicious" ? "#dc2626"
+      : verdict === "pending" ? "#6366f1"
       : "#6b7280";
     const blurb = verdict === "clean" ? `No security vendors flagged this URL.`
       : verdict === "suspicious" ? `${summary.suspicious || 0} vendor(s) flagged this URL as suspicious.`
       : verdict === "malicious" ? `${summary.malicious || 0} vendor(s) flagged this URL as malicious.`
       : verdict === "unscanned" ? `Safety scanning is not configured on this server.`
+      : verdict === "pending" ? `Scanning with VirusTotal…`
       : `This URL has not been analysed yet.`;
     const proxyUrl = `/proxy?url=${encodeURIComponent(target)}`;
     const directUrl = target.replace(/"/g, "&quot;");
     const escHost = host.replace(/</g, "&lt;");
     const escTarget = target.replace(/</g, "&lt;").replace(/"/g, "&quot;");
-    const cont = verdict === "malicious" ? "Continue anyway (not recommended)" : "Continue anonymously";
+    const proxyLabel = verdict === "malicious" ? "View via proxy anyway" : "View via Atomic proxy";
+    const directLabel = verdict === "malicious" ? "Open directly (unsafe)" : "Open directly";
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Safety check — Atomic Search</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <link rel="stylesheet" href="/css/themes.css">
 <link rel="stylesheet" href="/css/styles.css">
+<style>
+  .go-card{max-width:640px;margin:56px auto;padding:28px;}
+  .go-verdict{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  .go-dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:${color};box-shadow:0 0 0 3px ${color}22}
+  .go-dot.pending{animation:pulse 1.1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.72);opacity:.55}}
+  .go-verdict-label{font-weight:700;text-transform:capitalize;font-size:15px}
+  .go-scan-ms{margin-left:auto;font-size:12px;color:var(--text-dim)}
+  .go-box{border:1px solid var(--border);border-radius:14px;padding:20px;margin:18px 0 22px;background:var(--bg-elev,#1a1a22)}
+  .go-url{margin:4px 0 0;color:var(--text-dim);font-size:13px;word-break:break-all}
+  .go-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .go-btn{display:block;padding:14px 18px;border-radius:12px;text-decoration:none;border:1px solid var(--border);transition:transform .08s ease}
+  .go-btn:hover{transform:translateY(-1px)}
+  .go-btn strong{display:block;font-size:15px;margin-bottom:2px}
+  .go-btn small{display:block;color:var(--text-dim);font-size:12px;line-height:1.4}
+  .go-btn.primary{background:var(--accent);color:#fff;border-color:transparent}
+  .go-btn.primary small{color:#ffffffcc}
+  .go-btn.direct{background:var(--bg-elev-2,transparent);color:var(--text)}
+  .go-foot{margin-top:18px;display:flex;gap:16px;align-items:center;color:var(--text-dim);font-size:12px}
+  .go-foot a{color:var(--text-dim)}
+  @media(max-width:520px){.go-actions{grid-template-columns:1fr}}
+</style>
 </head><body data-theme="atom-dark" class="interstitial">
-<main style="max-width:640px;margin:60px auto;padding:28px;">
-  <h1 style="margin-top:0">Safety check</h1>
-  <p style="color:var(--text-dim)">Before you leave Atomic, we checked this link with VirusTotal.</p>
-  <div style="border:1px solid var(--border);border-radius:12px;padding:20px;margin:24px 0;background:var(--bg-elev-1);">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color}"></span>
-      <strong style="text-transform:capitalize">${verdict}</strong>
-      <span style="color:var(--text-dim);font-size:13px;margin-left:auto">${escHost}</span>
+<main class="go-card">
+  <h1 style="margin:0 0 4px">Leaving Atomic Search</h1>
+  <p style="color:var(--text-dim);margin:0 0 18px">Before we send you on, we scanned this link with VirusTotal.</p>
+  <div class="go-box">
+    <div class="go-verdict">
+      <span id="go-dot" class="go-dot ${verdict === "pending" ? "pending" : ""}"></span>
+      <span id="go-label" class="go-verdict-label">${verdict}</span>
+      <span class="go-scan-ms" id="go-scan-ms">${verdict === "pending" ? "scanning…" : `scanned in ${scanMs}ms`}</span>
     </div>
-    <p style="margin:0 0 6px;">${blurb}</p>
-    <p style="margin:0;color:var(--text-dim);font-size:13px;word-break:break-all">${escTarget}</p>
+    <p id="go-blurb" style="margin:2px 0 0">${blurb}</p>
+    <p class="go-url"><strong>${escHost}</strong> &nbsp; <span>${escTarget}</span></p>
   </div>
-  <div style="display:flex;gap:12px;flex-wrap:wrap">
-    <a href="${proxyUrl}" style="background:var(--accent);color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none;font-weight:600">${cont}</a>
-    <a href="${directUrl}" rel="noreferrer noopener nofollow" style="background:var(--bg-elev-2);color:var(--text);padding:10px 18px;border-radius:999px;text-decoration:none;border:1px solid var(--border)">Open directly (leaks IP)</a>
-    <a href="/" style="color:var(--text-dim);padding:10px 18px;text-decoration:none">Go back</a>
+  <div class="go-actions">
+    <a class="go-btn primary" href="${proxyUrl}">
+      <strong>View via Atomic proxy</strong>
+      <small>Secure &amp; private — your IP and cookies stay hidden.</small>
+    </a>
+    <a class="go-btn direct" href="${directUrl}" rel="noreferrer noopener nofollow">
+      <strong>Open directly</strong>
+      <small>Fast &amp; reliable — but the site will see your IP.</small>
+    </a>
   </div>
-  <p style="margin-top:24px;color:var(--text-dim);font-size:12px">No history is saved. Atomic never logs which links you click.</p>
+  <div class="go-foot">
+    <a href="/">← Back to results</a>
+    <span>No history saved. Atomic never logs which links you click.</span>
+  </div>
 </main>
+${verdict === "pending" ? `<script>
+(async () => {
+  try {
+    const r = await fetch('/api/safety?url=' + encodeURIComponent(${JSON.stringify(target)}));
+    const s = await r.json();
+    const dot = document.getElementById('go-dot');
+    const label = document.getElementById('go-label');
+    const blurb = document.getElementById('go-blurb');
+    const ms = document.getElementById('go-scan-ms');
+    const color = s.verdict === 'clean' ? '#16a34a'
+      : s.verdict === 'suspicious' ? '#f59e0b'
+      : s.verdict === 'malicious' ? '#dc2626'
+      : '#6b7280';
+    dot.classList.remove('pending');
+    dot.style.background = color;
+    dot.style.boxShadow = '0 0 0 3px ' + color + '22';
+    label.textContent = s.verdict || 'unknown';
+    ms.textContent = 'scanned';
+    blurb.textContent = s.verdict === 'clean' ? 'No security vendors flagged this URL.'
+      : s.verdict === 'suspicious' ? (s.suspicious || 0) + ' vendor(s) flagged this URL as suspicious.'
+      : s.verdict === 'malicious' ? (s.malicious || 0) + ' vendor(s) flagged this URL as malicious.'
+      : s.verdict === 'unscanned' ? 'Safety scanning is not configured on this server.'
+      : 'This URL has not been analysed yet.';
+  } catch (e) { /* ignore */ }
+})();
+</script>` : ""}
 </body></html>`;
     return c.html(html);
   });

@@ -16,11 +16,32 @@ function overlap(a, b) {
   return k;
 }
 
+// Strip boilerplate that clogs extractive answers — nav menus, cookie
+// banners, "sign in", pagination, etc. These are substring checks (cheap).
+const BOILERPLATE_RE = /\b(cookie|privacy policy|terms of service|sign (?:in|up)|log ?in|subscribe|newsletter|all rights reserved|copyright ©|toggle navigation|skip to (?:main )?content|menu|home\s*›|jump to|read more|click here)\b/i;
+
 function sentencesFrom(text) {
   return (text || "")
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
-    .filter((s) => s.length >= 20 && s.length <= 320);
+    .filter((s) => {
+      if (s.length < 30 || s.length > 280) return false;
+      // Must end with terminal punctuation (real sentence, not a fragment).
+      if (!/[.!?]$/.test(s)) return false;
+      // Must start with a letter (skip "· " and bullets).
+      if (!/^[A-Z0-9"']/.test(s)) return false;
+      // Heuristic: reject nav/boilerplate.
+      if (BOILERPLATE_RE.test(s)) return false;
+      // Reject sentences with too many pipe/slash separators (menus).
+      if ((s.match(/[|›»]/g) || []).length >= 2) return false;
+      return true;
+    });
+}
+
+// Normalize a sentence so near-duplicates collapse: lowercase, strip
+// non-alphanum, collapse whitespace. Used for dedup only.
+function dedupKey(s) {
+  return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
 export function extractiveSummary(query, results, maxSentences = 5) {
@@ -142,42 +163,64 @@ function withTimeout(p, ms) {
 }
 
 // Synthesise a coherent prose answer from the highest-relevance sentences in
-// the aggregated results. We prefer own-index rows because they carry real
-// body text (~4000 chars) versus meta snippets (~240 chars), which lets us
-// produce a proper multi-sentence answer rather than a bullet list of titles.
+// the aggregated results. Prefers own-index rows (full body text) over meta
+// snippets (truncated to ~240 chars). Drops boilerplate, near-duplicates, and
+// sentences that don't actually reference the query.
 function synthesise(query, results) {
   const qTokens = tokenize(query);
+  const qSet = new Set(qTokens);
   const pool = [];
-  // Pass 1: own-index rows first, with their full body text.
-  for (const r of results.slice(0, 16)) {
+  const wikiHosts = new Set();
+
+  for (const r of results.slice(0, 20)) {
     const body = r.text || r.snippet || "";
-    const text = `${r.title || ""}. ${body}`;
+    // Title is often a clean, high-signal sentence on its own; append period
+    // so `sentencesFrom` accepts it.
+    const titleSentence = r.title && !/[.!?]$/.test(r.title) ? `${r.title}.` : (r.title || "");
+    const text = `${titleSentence} ${body}`;
+    const isWiki = /wikipedia\.org/.test(r.host || r.url || "");
+    if (isWiki) wikiHosts.add(r.host);
     for (const s of sentencesFrom(text)) {
-      const score = overlap(qTokens, tokenize(s));
-      pool.push({ s, score: score + (r.ownIndex ? 1 : 0), host: r.host, url: r.url, ownIndex: !!r.ownIndex });
+      const tokens = tokenize(s);
+      const hits = overlap(qTokens, tokens);
+      // Reject sentences with zero query-word overlap — they're probably
+      // unrelated boilerplate (e.g. "Download the app now.").
+      if (hits === 0) continue;
+      let score = hits * 2;
+      if (r.ownIndex) score += 1;            // prefer our scraped body text
+      if (isWiki) score += 3;                 // Wikipedia sentences are gold
+      if (qTokens.every((t) => tokens.includes(t))) score += 2; // all terms present
+      pool.push({ s, score, host: r.host, url: r.url, ownIndex: !!r.ownIndex, isWiki });
     }
   }
   pool.sort((a, b) => b.score - a.score);
+
+  // Pick up to 3 sentences, deduped by normalised key AND by prefix overlap
+  // so "Hono - Web framework…" + "Hono Web application framework…" collapse.
   const picked = [];
   const seen = new Set();
-  const hosts = new Set();
   for (const x of pool) {
-    const norm = x.s.replace(/\s+/g, " ").toLowerCase();
-    if (seen.has(norm.slice(0, 80))) continue;
-    seen.add(norm.slice(0, 80));
+    const key = dedupKey(x.s);
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    // Prefix-overlap guard — drop if the first 25 chars already appeared.
+    const prefix = key.slice(0, 25);
+    let dup = false;
+    for (const k of seen) if (k.startsWith(prefix) || prefix.startsWith(k.slice(0, 25))) { dup = true; break; }
+    if (dup) continue;
+    seen.add(key);
     picked.push(x);
-    hosts.add(x.host);
-    if (picked.length >= 4) break;
+    if (picked.length >= 3) break;
   }
   if (!picked.length) return null;
 
-  // Stitch into a single paragraph, trailing each fact with its source index.
+  // Build source list + cite each sentence.
   const sourceIndex = new Map();
   const sources = [];
   for (const p of picked) {
     if (!sourceIndex.has(p.url)) {
       sourceIndex.set(p.url, sources.length + 1);
-      sources.push({ n: sources.length + 1, title: p.s.slice(0, 60), url: p.url, host: p.host });
+      sources.push({ n: sources.length + 1, title: p.host, url: p.url, host: p.host });
     }
   }
   const prose = picked

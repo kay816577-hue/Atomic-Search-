@@ -364,6 +364,25 @@ export async function metaSearch(q, opts = {}) {
     engines: ["atomic"],
     score: Math.round(r.score * 1000) / 1000,
   }));
+
+  // Knowledge-card promotion: if Wikipedia returned an article whose title
+  // looks like it's ABOUT the query (i.e. contains every query token), hoist
+  // it to position 0. This is the difference between "search 'google' →
+  // support.google.com spam" and "search 'google' → Wikipedia's Google
+  // article". Only triggers on page 1 so paged results aren't reshuffled.
+  if (page === 1) {
+    const qTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    const wikiIdx = merged.findIndex((r) => {
+      if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
+      const t = (r.title || "").toLowerCase();
+      return qTokens.every((tok) => t.includes(tok));
+    });
+    if (wikiIdx > 0) {
+      const [wiki] = merged.splice(wikiIdx, 1);
+      merged.unshift(wiki);
+    }
+  }
+
   const hasMore = merged.length > perPage;
   const results = merged.slice(0, perPage);
 
