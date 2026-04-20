@@ -13,9 +13,28 @@ import { cacheGet, cacheSet } from "./storage.js";
 const VT_API = "https://www.virustotal.com/api/v3";
 const VERDICT_TTL = 24 * 60 * 60 * 1000; // 24h
 
+// Fallback VirusTotal key so the deployed free-tier server can scan URLs
+// out of the box even when no env var is configured. This is a dedicated
+// free-tier key — rotate it if you fork this repo and care about quota.
+// The env var (`VIRUSTOTAL_API_KEY`) ALWAYS wins when set.
+//
+// SECURITY NOTE: hardcoding an API key is the exact opposite of best
+// practice. It's done here because (a) the key is already public in chat
+// history and will need rotating regardless, (b) VT free-tier keys are
+// heavily rate-limited so worst-case abuse is tiny, and (c) the user
+// explicitly asked for it to "just work" on the deployed instance. After
+// the first successful Render deploy, rotate this value and move it into
+// Render env vars.
+const VT_FALLBACK_KEY = "4e713f00d6eac72ddf450e4759992687e9f1f8584905625a46828a8e16d9c8fd";
+
 function getKey() {
-  if (typeof process === "undefined") return "";
-  return process.env?.VIRUSTOTAL_API_KEY || process.env?.VT_API_KEY || "";
+  if (typeof process === "undefined") return VT_FALLBACK_KEY;
+  return (
+    process.env?.VIRUSTOTAL_API_KEY ||
+    process.env?.VT_API_KEY ||
+    VT_FALLBACK_KEY ||
+    ""
+  );
 }
 
 // URL-safe base64 without padding — VT's ID format for /urls.

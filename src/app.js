@@ -4,7 +4,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { metaSearch } from "./aggregator.js";
+import { metaSearch, engineHealth } from "./aggregator.js";
 import { metaImages } from "./images.js";
 import { aiAnswer } from "./ai.js";
 import { proxyHandler } from "./proxy.js";
@@ -73,25 +73,60 @@ function rememberAnswer(query, results) {
   })();
 }
 
-// Score an own-index row against the query so we can boost strong matches
-// above meta-search results. Simple but effective:
-// - +3 for every distinct query token found in title
-// - +1 for every distinct query token found in text
-// - +2 bonus if the whole phrase appears in title
-// - small recency bonus
+// Semantic-ish scoring for own-index rows. We don't have embeddings (no
+// external API, no local model that fits in Render free RAM), so we
+// approximate relevance with three cheap signals:
+//   (a) token COVERAGE in the title — fraction of query tokens present
+//   (b) token COVERAGE in the body
+//   (c) PHRASE proximity — whole-query match in title/body
+// Title matches dominate. A title that covers ALL query tokens beats a
+// body that just mentions one of them. Recency is a small tie-breaker.
+const STOPWORDS = new Set([
+  "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
+  "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
+  "from", "what", "who", "why", "how", "do", "does", "did",
+]);
 function scoreOwnIndexRow(row, query) {
-  const q = (query || "").toLowerCase();
+  const q = (query || "").toLowerCase().trim();
+  if (!q) return 0;
   const title = (row.title || "").toLowerCase();
   const text = (row.text || "").toLowerCase();
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
-  let score = 0;
-  for (const t of tokens) {
-    if (title.includes(t)) score += 3;
-    if (text.includes(t)) score += 1;
+  const rawTokens = q.split(/\s+/).filter((t) => t.length >= 2);
+  const tokens = rawTokens.filter((t) => !STOPWORDS.has(t));
+  const denom = Math.max(1, tokens.length || rawTokens.length);
+
+  let titleHits = 0;
+  let textHits = 0;
+  for (const t of (tokens.length ? tokens : rawTokens)) {
+    if (title.includes(t)) titleHits += 1;
+    if (text.includes(t)) textHits += 1;
   }
-  if (q.length >= 4 && title.includes(q)) score += 2;
+  const titleCoverage = titleHits / denom;
+  const textCoverage = textHits / denom;
+
+  // Base score: title dominates (~5x body) and we reward full coverage
+  // super-linearly so "all tokens in title" >> "half the tokens".
+  let score = titleCoverage * 10 + textCoverage * 2;
+  if (titleCoverage === 1) score += 3; // all tokens present in title
+  if (textCoverage === 1) score += 1;
+
+  // Phrase proximity — the whole query showing up verbatim is a strong
+  // signal, especially in the title.
+  if (q.length >= 4) {
+    if (title.includes(q)) score += 4;
+    else if (text.includes(q)) score += 1.5;
+  }
+
+  // Title-length prior: a 3-word title with all 3 tokens is a much
+  // tighter match than a 50-word title that happens to include the
+  // tokens somewhere.
+  const titleLen = Math.max(1, title.split(/\s+/).length);
+  if (titleHits === denom && titleLen <= denom * 3) score += 1.5;
+
+  // Small freshness bonus — pages crawled in the last week.
   const age = Math.max(0, Date.now() - (row.indexed_at || 0));
-  if (age < 7 * 24 * 3600 * 1000) score += 0.5; // fresh
+  if (age < 7 * 24 * 3600 * 1000) score += 0.5;
+
   return score;
 }
 
@@ -106,7 +141,11 @@ export function buildApp() {
 
   app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
 
-  app.get("/api/stats", async (c) => c.json(await storageStats()));
+  app.get("/api/stats", async (c) => {
+    const s = await storageStats();
+    return c.json({ ...s, engines: engineHealth() });
+  });
+  app.get("/api/health/engines", (c) => c.json(engineHealth()));
 
   app.get("/api/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
@@ -122,36 +161,51 @@ export function buildApp() {
       return c.json({ ...cached, cached: true, atomicAnswer });
     }
 
-    // Own-index matches — fetched on every page so strong in-index results
-    // always surface underneath meta results. We REQUIRE a title match so
-    // an unrelated page that merely mentions the query word in its body
-    // (e.g. hono.dev mentioning Google Fonts on a search for "google")
-    // never leaks into a different query's results.
+    // Own-index matches — fetched on every page. Strong hits (title match
+    // OR very high score) are fused into the RRF pool as an additional
+    // "engine", so they compete head-to-head with meta results. Weaker
+    // tail matches are still appended below, gated by title-hit to avoid
+    // body-word leaks (e.g. hono.dev mentioning "Google Fonts" on a query
+    // for "google").
     const ownRaw = await searchPages(q, 30).catch(() => []);
-    const ownRanked = ownRaw
-      .map((p) => ({
+    const ownScored = ownRaw.map((p) => {
+      const score = scoreOwnIndexRow(p, q);
+      const titleHit =
+        (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
+        (q || "")
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length >= 2)
+          .every((t) => (p.title || "").toLowerCase().includes(t));
+      return {
         url: p.url,
         host: p.host,
         title: p.title,
-        text: p.text, // full body so AI synthesis has something meaty to chew on
+        text: p.text,
         snippet: (p.text || "").slice(0, 240),
-        engines: ["atomic-index"],
-        score: scoreOwnIndexRow(p, q),
-        titleHit: (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
-          (q || "")
-            .toLowerCase()
-            .split(/\s+/)
-            .filter((t) => t.length >= 2)
-            .every((t) => (p.title || "").toLowerCase().includes(t)),
+        engine: "atomic-index",
+        score,
+        titleHit,
         ownIndex: true,
-      }))
+      };
+    });
+    // Top-tier rows (strong match) go into the fusion pool as an extra list.
+    const ownFused = ownScored
       .filter((r) => r.titleHit && r.score >= 3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 15);
+    // Second-tier rows (weaker but still title-hit) will be appended below
+    // so we never lose recall on genuinely relevant in-index pages.
+    const ownTailPool = ownScored
+      .filter((r) => r.titleHit && r.score >= 1 && !ownFused.find((f) => f.url === r.url))
       .sort((a, b) => b.score - a.score);
 
-    const meta = await metaSearch(q, { page, perPage });
+    const meta = await metaSearch(q, {
+      page,
+      perPage,
+      extraLists: ownFused.length ? [ownFused] : [],
+    });
 
-    // Meta first (as the user requested), then any own-index row that wasn't
-    // already surfaced by the aggregators. Capped at `perPage`.
     const seen = new Set();
     const metaOrdered = [];
     for (const r of meta.results) {
@@ -161,13 +215,15 @@ export function buildApp() {
     }
     const ownTail = [];
     const ownCap = page === 1 ? 10 : 20;
-    for (const r of ownRanked.slice(0, ownCap)) {
+    for (const r of ownTailPool.slice(0, ownCap)) {
       if (seen.has(r.url)) continue;
       seen.add(r.url);
-      ownTail.push(r);
+      ownTail.push({ ...r, engines: ["atomic-index"] });
     }
 
     const merged = [...metaOrdered, ...ownTail].slice(0, perPage);
+    const ownIndexCount =
+      metaOrdered.filter((r) => r.ownIndex).length + ownTail.length;
 
     // Pinned answer card — only on page 1, only if we already synthesised one
     // for this exact query on a previous search.
@@ -176,7 +232,7 @@ export function buildApp() {
     const out = {
       ...meta,
       results: merged,
-      ownIndexCount: ownTail.length,
+      ownIndexCount,
       atomicAnswer,
     };
     await cacheSet(key, { ...out, atomicAnswer: undefined }, SEARCH_TTL);

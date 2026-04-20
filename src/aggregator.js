@@ -317,6 +317,59 @@ async function marginalia(q, page = 1) {
 
 const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia };
 
+// ---------- Self-healing engine tracker ----------
+// Every engine has an independent failure budget. Three consecutive failures
+// (exception OR empty result) puts it in a 5-minute cooldown where we skip
+// the HTTP call entirely. A single success resets it. This keeps the UI
+// snappy when one upstream is flaky without permanently losing coverage.
+const ENGINE_HEALTH = Object.fromEntries(
+  ENGINES.map((e) => [e, { consecutiveFailures: 0, cooldownUntil: 0, totalCalls: 0, totalFailures: 0, lastError: null }])
+);
+const FAILURE_LIMIT = 3;
+const COOLDOWN_MS = 5 * 60 * 1000;
+
+function engineReady(engine) {
+  const h = ENGINE_HEALTH[engine];
+  if (!h) return true;
+  return Date.now() >= h.cooldownUntil;
+}
+
+function recordEngineResult(engine, ok, err) {
+  const h = ENGINE_HEALTH[engine];
+  if (!h) return;
+  h.totalCalls += 1;
+  if (ok) {
+    h.consecutiveFailures = 0;
+    h.lastError = null;
+    return;
+  }
+  h.consecutiveFailures += 1;
+  h.totalFailures += 1;
+  h.lastError = err ? String(err).slice(0, 160) : "empty";
+  if (h.consecutiveFailures >= FAILURE_LIMIT) {
+    h.cooldownUntil = Date.now() + COOLDOWN_MS;
+    h.consecutiveFailures = 0; // reset so it tries again after cooldown
+  }
+}
+
+export function engineHealth() {
+  const now = Date.now();
+  const out = {};
+  for (const [engine, h] of Object.entries(ENGINE_HEALTH)) {
+    out[engine] = {
+      healthy: now >= h.cooldownUntil,
+      cooldownMsLeft: Math.max(0, h.cooldownUntil - now),
+      totalCalls: h.totalCalls,
+      totalFailures: h.totalFailures,
+      successRate: h.totalCalls
+        ? Math.round(((h.totalCalls - h.totalFailures) / h.totalCalls) * 1000) / 10
+        : null,
+      lastError: h.lastError,
+    };
+  }
+  return out;
+}
+
 export async function metaSearch(q, opts = {}) {
   if (!q || !q.trim()) {
     return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0 };
@@ -325,13 +378,27 @@ export async function metaSearch(q, opts = {}) {
   const page = Math.max(1, Number(opts.page) || 1);
   const pagesPerEngine = Math.max(1, Math.min(5, Number(opts.pagesPerEngine) || ENGINE_PAGES_PER_META));
   const perPage = Math.max(10, Math.min(200, Number(opts.perPage) || 100));
+  // Optional: additional ranked lists from OTHER sources (e.g. our own
+  // SQLite-indexed pages) that should be fused in via RRF. The caller
+  // passes these as `extraLists: [[item,…], …]`. They get the same RRF
+  // treatment as the public engines, so a strong atomic-index hit can
+  // naturally rank ABOVE weak meta results.
+  const extraLists = Array.isArray(opts.extraLists) ? opts.extraLists.filter(Array.isArray) : [];
 
   const jobs = [];
   for (const engine of ENGINES) {
+    if (!engineReady(engine)) continue; // cooldown — skip this engine entirely
     const run = RUNNERS[engine];
     for (let i = 0; i < pagesPerEngine; i++) {
       const enginePage = (page - 1) * pagesPerEngine + (i + 1);
-      jobs.push({ engine, enginePage, promise: run(query, enginePage).catch(() => []) });
+      jobs.push({
+        engine,
+        enginePage,
+        promise: run(query, enginePage).then(
+          (list) => ({ ok: true, list }),
+          (err) => ({ ok: false, err, list: [] })
+        ),
+      });
     }
   }
   const resolved = await Promise.allSettled(jobs.map((j) => j.promise));
@@ -340,10 +407,16 @@ export async function metaSearch(q, opts = {}) {
   const perEngineStatus = {};
   jobs.forEach((job, idx) => {
     const s = resolved[idx];
-    const list = s.status === "fulfilled" ? s.value : [];
+    const payload = s.status === "fulfilled" ? s.value : { ok: false, list: [] };
+    const list = payload.list || [];
     (perEngineLists[job.engine] = perEngineLists[job.engine] || []).push({ enginePage: job.enginePage, list });
     perEngineStatus[job.engine] = perEngineStatus[job.engine] || { count: 0 };
     if (list.length) perEngineStatus[job.engine].count += list.length;
+    // Record ONE outcome per engine per call (use the first page's result so
+    // an engine isn't penalised 3x for being down).
+    if (job.enginePage === (page - 1) * pagesPerEngine + 1) {
+      recordEngineResult(job.engine, payload.ok && list.length > 0, payload.err);
+    }
   });
 
   const flatLists = [];
@@ -353,8 +426,19 @@ export async function metaSearch(q, opts = {}) {
     for (const { list } of pages) flat.push(...list);
     if (flat.length) flatLists.push(flat);
   }
+  // Fuse our own-index ranked list(s) in as additional "engines" so strong
+  // Atomic hits can outrank weak meta hits via the same RRF math. The
+  // caller is responsible for pre-filtering these to high-confidence rows.
+  for (const extra of extraLists) {
+    if (extra.length) flatLists.push(extra);
+  }
 
   let merged = rankBlend(flatLists);
+  // Preserve the `ownIndex` flag when it's present (so the UI can badge it).
+  const ownUrls = new Set();
+  for (const extra of extraLists) {
+    for (const r of extra) if (r?.url) ownUrls.add(normaliseUrl(r.url));
+  }
   merged = uniqBy(merged, (r) => r.url).map((r) => ({
     url: r.url,
     host: hostFromUrl(r.url),
@@ -362,6 +446,7 @@ export async function metaSearch(q, opts = {}) {
     snippet: r.snippet,
     // Single, branded source — never leak the upstream engine id.
     engines: ["atomic"],
+    ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
     score: Math.round(r.score * 1000) / 1000,
   }));
 
