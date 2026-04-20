@@ -6,7 +6,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { metaSearch, engineHealth } from "./aggregator.js";
 import { metaImages } from "./images.js";
-import { aiAnswer } from "./ai.js";
 import { proxyHandler } from "./proxy.js";
 import { safetyCheck } from "./safety.js";
 import {
@@ -16,8 +15,6 @@ import {
   addSubmission,
   enqueueCrawl,
   stats as storageStats,
-  getAnswer,
-  putAnswer,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { buildAuthRoutes, currentUser } from "./auth.js";
@@ -55,22 +52,6 @@ function growIndex(results, { eager = 5, queueCap = 20 } = {}) {
       enqueueCrawl(u).catch(() => {});
     }
   } catch { /* ignore */ }
-}
-
-// Fire-and-forget AI synthesis so repeat searches for the same query surface
-// a pinned "Atomic answer" card. Runs after the response has been sent so
-// the user never waits on it.
-function rememberAnswer(query, results) {
-  (async () => {
-    try {
-      const existing = await getAnswer(query);
-      if (existing) return; // already cached
-      const ai = await aiAnswer(query, results);
-      if (ai?.answer) {
-        await putAnswer(query, { answer: ai.answer, mode: ai.mode, sources: ai.sources });
-      }
-    } catch { /* ignore */ }
-  })();
 }
 
 // Semantic-ish scoring for own-index rows. We don't have embeddings (no
@@ -154,12 +135,7 @@ export function buildApp() {
     const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
     const cached = await cacheGet(key);
-    if (cached) {
-      // Even on cache hit, attach the latest cached answer (it may have been
-      // synthesised after this search entry was stored).
-      const atomicAnswer = page === 1 ? await getAnswer(q).catch(() => null) : null;
-      return c.json({ ...cached, cached: true, atomicAnswer });
-    }
+    if (cached) return c.json({ ...cached, cached: true });
 
     // Own-index matches — fetched on every page. Strong hits (title match
     // OR very high score) are fused into the RRF pool as an additional
@@ -225,19 +201,9 @@ export function buildApp() {
     const ownIndexCount =
       metaOrdered.filter((r) => r.ownIndex).length + ownTail.length;
 
-    // Pinned answer card — only on page 1, only if we already synthesised one
-    // for this exact query on a previous search.
-    const atomicAnswer = page === 1 ? await getAnswer(q).catch(() => null) : null;
-
-    const out = {
-      ...meta,
-      results: merged,
-      ownIndexCount,
-      atomicAnswer,
-    };
-    await cacheSet(key, { ...out, atomicAnswer: undefined }, SEARCH_TTL);
+    const out = { ...meta, results: merged, ownIndexCount };
+    await cacheSet(key, out, SEARCH_TTL);
     growIndex(merged);
-    rememberAnswer(q, merged);
     return c.json(out);
   });
 
@@ -252,42 +218,9 @@ export function buildApp() {
     return c.json(data);
   });
 
-  // AI endpoint — opt-in. Clients only hit this when the user has AI enabled.
-  async function computeAi(q) {
-    if (!q) return { query: "", answer: "", sources: [] };
-    // Short-circuit with the cached answer if we already synthesised one.
-    const prior = await getAnswer(q).catch(() => null);
-    if (prior?.answer) {
-      return { query: q, mode: prior.mode || "synthesis", answer: prior.answer, sources: prior.sources || [], cached: true };
-    }
-    // Reuse the page-1 search cache if present — avoids a second full fan-out.
-    const cacheKey = `search:${q.toLowerCase()}:p1:n50`;
-    const cached = await cacheGet(cacheKey);
-    let results;
-    if (cached?.results?.length) {
-      // Re-hydrate own-index bodies so synthesis has the full page text.
-      const own = await searchPages(q, 10).catch(() => []);
-      const byUrl = new Map(own.map((p) => [p.url, p]));
-      results = cached.results.map((r) => (byUrl.has(r.url) ? { ...r, text: byUrl.get(r.url).text, ownIndex: true } : r));
-    } else {
-      const search = await metaSearch(q, { page: 1, perPage: 50 });
-      await cacheSet(cacheKey, search, SEARCH_TTL);
-      results = search.results;
-    }
-    const ai = await aiAnswer(q, results);
-    if (ai?.answer) await putAnswer(q, { answer: ai.answer, mode: ai.mode, sources: ai.sources }).catch(() => {});
-    return ai;
-  }
-  app.post("/api/ai", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const q = (body.q || c.req.query("q") || "").trim();
-    return c.json(await computeAi(q));
-  });
-  // GET alias so the frontend can use a simple fetch + no preflight.
-  app.get("/api/ai", async (c) => {
-    const q = (c.req.query("q") || "").trim();
-    return c.json(await computeAi(q));
-  });
+  // AI feature removed — the synthesized-answer experience was unreliable
+  // at this scale and the user asked to drop it entirely. If we ever want
+  // it back, restore computeAi / /api/ai / rememberAnswer from git history.
 
   app.post("/api/submit", async (c) => {
     const body = await c.req.json().catch(() => ({}));

@@ -9,17 +9,20 @@ import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./ut
 // Internal engine ids are used only for RRF / debugging. They are never
 // leaked to the client (the /api/search response reports results as sourced
 // from "atomic" only).
+// Startpage gives us Google-sourced results through a privacy-preserving
+// proxy, and Wikipedia gives us a reliable knowledge card for entity
+// queries. That's the whole meta layer — the other engines were
+// inconsistent and polluting results with off-topic pages (e.g. fishing
+// rafts for "raft consensus algorithm"). The growing Atomic index fills
+// in long-tail coverage.
 const ENGINES = [
-  "primary",      // Bing HTML (en-US forced)
-  "ddg",          // DuckDuckGo HTML
-  "brave",        // Brave Search HTML
-  "startpage",    // Startpage HTML (free, Google-sourced, no tracking)
-  "searxng",      // community SearXNG instance (first working one)
-  "wikipedia",    // Wikipedia OpenSearch JSON
-  "marginalia",   // Marginalia small-web index
+  "startpage",
+  "wikipedia",
 ];
 
-const ENGINE_PAGES_PER_META = 3;
+// With a smaller engine set we fan out more pages per engine so result
+// volume stays healthy.
+const ENGINE_PAGES_PER_META = 5;
 
 // Pool of public SearXNG instances — tried round-robin until one answers.
 const SEARXNG_POOL = [
@@ -450,17 +453,43 @@ export async function metaSearch(q, opts = {}) {
     score: Math.round(r.score * 1000) / 1000,
   }));
 
+  // Relevance filter: for multi-token queries, drop results where NEITHER
+  // the title nor the snippet covers enough of the query. This kills the
+  // "fishing raft" results for "raft consensus algorithm" problem —
+  // upstream engines sometimes return pages that only share one word
+  // with the query. Atomic-index rows and Wikipedia articles are exempt
+  // (they're already strongly-matched signals).
+  const relevanceStopwords = new Set([
+    "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
+    "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
+    "from", "what", "who", "why", "how", "do", "does", "did",
+  ]);
+  const qAllTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+  const qTokens = qAllTokens.filter((t) => !relevanceStopwords.has(t));
+  const effTokens = qTokens.length ? qTokens : qAllTokens;
+  if (effTokens.length >= 2) {
+    const minCoverage = 0.5; // must match at least half the meaningful tokens
+    merged = merged.filter((r) => {
+      if (r.ownIndex) return true;
+      if (/en\.wikipedia\.org\/wiki\//.test(r.url)) return true;
+      const title = (r.title || "").toLowerCase();
+      const snip = (r.snippet || "").toLowerCase();
+      const hay = title + " " + snip;
+      const hits = effTokens.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0);
+      return hits / effTokens.length >= minCoverage;
+    });
+  }
+
   // Knowledge-card promotion: if Wikipedia returned an article whose title
   // looks like it's ABOUT the query (i.e. contains every query token), hoist
   // it to position 0. This is the difference between "search 'google' →
   // support.google.com spam" and "search 'google' → Wikipedia's Google
   // article". Only triggers on page 1 so paged results aren't reshuffled.
   if (page === 1) {
-    const qTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     const wikiIdx = merged.findIndex((r) => {
       if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
       const t = (r.title || "").toLowerCase();
-      return qTokens.every((tok) => t.includes(tok));
+      return qAllTokens.every((tok) => t.includes(tok));
     });
     if (wikiIdx > 0) {
       const [wiki] = merged.splice(wikiIdx, 1);

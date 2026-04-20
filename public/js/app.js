@@ -4,7 +4,6 @@
   /* ---------------- Settings (localStorage) ---------------- */
   var SETTINGS_KEY = "atomic.settings";
   var defaultSettings = {
-    ai: false,
     safety: true,
     proxyLinks: true,
     perPage: 50,
@@ -102,11 +101,9 @@
     $("results").hidden = state.tab !== "all" && state.tab !== "news";
     $("pager").hidden = $("results").hidden;
     $("images-grid").hidden = state.tab !== "images";
-    $("ai-full").hidden = state.tab !== "ai";
     $("empty").hidden = true;
     if (!state.q) return;
     if (state.tab === "images") doImages(state.q);
-    else if (state.tab === "ai") doAI(state.q);
     else doSearch(state.q);
   }
 
@@ -144,8 +141,7 @@
       "<span>" + ownCount + " from Atomic index</span>";
 
     $("results").hidden = false;
-    var pinned = data.atomicAnswer ? renderAtomicAnswer(data.atomicAnswer) : "";
-    $("results").innerHTML = pinned + results.map(renderResult).join("");
+    $("results").innerHTML = results.map(renderResult).join("");
     renderPager(data);
 
     // Lazy-fetch safety verdicts in batches of 10.
@@ -156,24 +152,6 @@
     refreshIndexChip();
     setTimeout(refreshIndexChip, 2500);
     setTimeout(refreshIndexChip, 7000);
-  }
-
-  function renderAtomicAnswer(a) {
-    if (!a || !a.answer) return "";
-    var srcs = (a.sources || []).map(function (s, i) {
-      return '<a href="' + esc(linkFor(s.url)) + '" target="_top" rel="noreferrer noopener">[' + (i + 1) + '] ' + esc(s.host || s.title || s.url) + "</a>";
-    }).join(" ");
-    return (
-      '<article class="atomic-answer">' +
-      '  <div class="atomic-answer-head">' +
-      '    <span class="atomic-answer-badge">Atomic answer</span>' +
-      '    <span class="atomic-answer-mode">' + esc(a.mode || "synthesis") + "</span>" +
-      (a.hitCount ? '    <span class="atomic-answer-hits">seen ' + a.hitCount + " ×</span>" : "") +
-      "  </div>" +
-      '  <p class="atomic-answer-text">' + esc(a.answer).replace(/\n/g, "<br>") + "</p>" +
-      (srcs ? '<p class="atomic-answer-sources">' + srcs + "</p>" : "") +
-      "</article>"
-    );
   }
 
   function renderResult(r, i) {
@@ -279,44 +257,6 @@
     }
   }
 
-  async function doAI(q) {
-    $("ai-full").hidden = false;
-    $("results").hidden = true;
-    $("pager").hidden = true;
-    if (!settings.ai) {
-      $("ai-full").innerHTML =
-        '<div class="ai-disabled">' +
-        '  <h2>AI answers are off</h2>' +
-        '  <p>Turn on AI answers in Settings to get a concise summary over the Atomic index for your query.</p>' +
-        '  <button id="ai-enable">Enable AI</button>' +
-        "</div>";
-      var btn = $("ai-enable");
-      if (btn) btn.addEventListener("click", function () {
-        settings.ai = true;
-        saveSettings(settings);
-        refreshSettingsUI();
-        doAI(q);
-      });
-      return;
-    }
-    $("ai-full").innerHTML = '<div class="ai-summary"><div class="ai-head"><span class="ai-badge">AI</span><span class="ai-mode">Thinking…</span></div><p class="ai-text"><span class="loading"></span>Reading top results…</p></div>';
-    try {
-      var res = await fetch("/api/ai?q=" + encodeURIComponent(q));
-      var data = await res.json();
-      var srcHTML = (data.sources || []).map(function (s, i) {
-        return '<li><a href="' + esc(linkFor(s.url)) + '" target="_top" rel="noreferrer noopener">[' + (i + 1) + '] ' + esc(s.title || s.host) + "</a> — <span class=\"host\">" + esc(s.host) + "</span></li>";
-      }).join("");
-      $("ai-full").innerHTML =
-        '<div class="ai-summary">' +
-        '<div class="ai-head"><span class="ai-badge">AI</span><span class="ai-mode">' + esc(data.mode || "extractive") + "</span></div>" +
-        '<p class="ai-text">' + esc(data.answer || "").replace(/\n/g, "<br>") + "</p>" +
-        (srcHTML ? '<ol class="ai-sources">' + srcHTML + "</ol>" : "") +
-        "</div>";
-    } catch (e) {
-      $("ai-full").innerHTML = '<p class="empty">AI unavailable.</p>';
-    }
-  }
-
   /* ---------------- URL state ---------------- */
   function pushUrl() {
     var url = new URL(location.href);
@@ -332,14 +272,12 @@
   function closeModal(el) { el.hidden = true; document.body.style.overflow = ""; }
 
   function refreshSettingsUI() {
-    $("setting-ai").checked = !!settings.ai;
     $("setting-safety").checked = !!settings.safety;
     $("setting-proxylinks").checked = !!settings.proxyLinks;
     $("setting-perpage").value = String(settings.perPage);
   }
 
   function bindSettings() {
-    $("setting-ai").addEventListener("change", function (e) { settings.ai = e.target.checked; saveSettings(settings); });
     $("setting-safety").addEventListener("change", function (e) { settings.safety = e.target.checked; saveSettings(settings); });
     $("setting-proxylinks").addEventListener("change", function (e) { settings.proxyLinks = e.target.checked; saveSettings(settings); });
     $("setting-perpage").addEventListener("change", function (e) {

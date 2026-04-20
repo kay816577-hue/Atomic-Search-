@@ -93,7 +93,6 @@
         <button data-tab="all" class="active" role="tab">All</button>
         <button data-tab="images" role="tab">Images</button>
         <button data-tab="news" role="tab">News</button>
-        <button data-tab="ai" role="tab">AI</button>
       </nav>
 
       <main>
@@ -106,8 +105,6 @@
         <section id="results" class="results" role="region" aria-label="Search results"></section>
         <nav id="pager" class="pager" hidden></nav>
         <section id="images-grid" class="images-grid" hidden></section>
-        <section id="ai-full" class="ai-full" hidden></section>
-
         <div id="empty" class="empty" hidden>
           <p>No results.</p>
         </div>
@@ -149,13 +146,6 @@
           </div>
 
           <h3>Search</h3>
-          <div class="setting-row">
-            <div>
-              <div class="label">AI answers</div>
-              <div class="hint">Extractive summaries over our own index. Off by default.</div>
-            </div>
-            <label class="toggle"><input type="checkbox" id="setting-ai"><span class="slider"></span></label>
-          </div>
           <div class="setting-row">
             <div>
               <div class="label">Safety badges</div>
