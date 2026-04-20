@@ -68,7 +68,14 @@ async function tryLoadSqlite() {
       CREATE INDEX IF NOT EXISTS pages_text_idx ON pages(text);
       CREATE TABLE IF NOT EXISTS crawl_queue (
         url TEXT PRIMARY KEY,
-        added_at INTEGER
+        added_at INTEGER,
+        attempts INTEGER DEFAULT 0,
+        next_attempt_at INTEGER DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS dead_urls (
+        url TEXT PRIMARY KEY,
+        reason TEXT,
+        died_at INTEGER
       );
       CREATE TABLE IF NOT EXISTS submissions (
         url TEXT PRIMARY KEY,
@@ -93,6 +100,15 @@ async function tryLoadSqlite() {
         hit_count INTEGER DEFAULT 1
       );
     `);
+    // Soft migration for older DBs that predate the failure-tracking columns.
+    // SQLite has no "ADD COLUMN IF NOT EXISTS", so we probe via pragma. This
+    // has to run BEFORE we create the index that references next_attempt_at.
+    try {
+      const cols = db.prepare("PRAGMA table_info(crawl_queue)").all().map((r) => r.name);
+      if (!cols.includes("attempts")) db.exec("ALTER TABLE crawl_queue ADD COLUMN attempts INTEGER DEFAULT 0");
+      if (!cols.includes("next_attempt_at")) db.exec("ALTER TABLE crawl_queue ADD COLUMN next_attempt_at INTEGER DEFAULT 0");
+    } catch { /* ignore */ }
+    db.exec("CREATE INDEX IF NOT EXISTS crawl_queue_ready_idx ON crawl_queue(next_attempt_at);");
     sqlite = true;
     return true;
   } catch {
@@ -187,20 +203,93 @@ export async function addSubmission(url) {
   return true;
 }
 
+// Pop the next crawl task. Respects next_attempt_at so a failing URL that's
+// been backed off isn't re-tried until its cooldown has elapsed. URLs known
+// dead (exceeded the retry budget) are skipped entirely.
 export async function nextCrawlTask() {
   if (!(await tryLoadSqlite())) return null;
-  const row = db.prepare("SELECT url FROM crawl_queue ORDER BY added_at LIMIT 1").get();
+  const row = db
+    .prepare(
+      `SELECT q.url, q.attempts FROM crawl_queue q
+       LEFT JOIN dead_urls d ON d.url = q.url
+       WHERE d.url IS NULL AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= ?)
+       ORDER BY q.added_at LIMIT 1`
+    )
+    .get(now());
   if (!row) return null;
-  db.prepare("DELETE FROM crawl_queue WHERE url = ?").run(row.url);
-  return row.url;
+  // Hold onto attempts so the caller knows what retry-budget we're on.
+  return { url: row.url, attempts: row.attempts || 0 };
 }
 
 export async function enqueueCrawl(url) {
   if (!(await tryLoadSqlite())) return false;
+  const dead = db.prepare("SELECT 1 FROM dead_urls WHERE url = ?").get(url);
+  if (dead) return false;
   db.prepare(
-    "INSERT OR IGNORE INTO crawl_queue(url, added_at) VALUES(?, ?)"
+    "INSERT OR IGNORE INTO crawl_queue(url, added_at, attempts, next_attempt_at) VALUES(?, ?, 0, 0)"
   ).run(url, now());
   return true;
+}
+
+// Successful fetch — drop from queue (already crawled or now in pages).
+export async function dropFromQueue(url) {
+  if (!(await tryLoadSqlite())) return false;
+  db.prepare("DELETE FROM crawl_queue WHERE url = ?").run(url);
+  return true;
+}
+
+// Per-URL retry with exponential backoff, capped at a reasonable ceiling.
+// After MAX_CRAWL_ATTEMPTS the URL is considered dead — pruned from pages
+// and recorded in dead_urls so we don't try it again.
+const MAX_CRAWL_ATTEMPTS = 5;
+const BACKOFF_BASE_MS = 60 * 1000; // 1 min
+
+export async function recordCrawlFailure(url, reason) {
+  if (!(await tryLoadSqlite())) return { dead: false };
+  const row = db.prepare("SELECT attempts FROM crawl_queue WHERE url = ?").get(url);
+  const attempts = (row?.attempts || 0) + 1;
+  if (attempts >= MAX_CRAWL_ATTEMPTS) {
+    db.prepare("DELETE FROM crawl_queue WHERE url = ?").run(url);
+    db.prepare("DELETE FROM pages WHERE url = ?").run(url);
+    db.prepare(
+      "INSERT OR REPLACE INTO dead_urls(url, reason, died_at) VALUES(?, ?, ?)"
+    ).run(url, (reason || "unknown").toString().slice(0, 160), now());
+    return { dead: true, attempts };
+  }
+  // Exponential backoff: 1m, 4m, 16m, 64m (capped by MAX_CRAWL_ATTEMPTS).
+  const cooldown = BACKOFF_BASE_MS * Math.pow(4, attempts - 1);
+  const next = now() + cooldown;
+  if (row) {
+    db.prepare("UPDATE crawl_queue SET attempts = ?, next_attempt_at = ? WHERE url = ?")
+      .run(attempts, next, url);
+  } else {
+    // Shouldn't normally happen (we took it out of the queue), but re-add so
+    // the retry actually fires.
+    db.prepare(
+      "INSERT OR REPLACE INTO crawl_queue(url, added_at, attempts, next_attempt_at) VALUES(?, ?, ?, ?)"
+    ).run(url, now(), attempts, next);
+  }
+  return { dead: false, attempts, retryInMs: cooldown };
+}
+
+// Re-enqueue pages older than `olderThanMs`. Used by the janitor so our index
+// stays fresh without us having to manually re-submit every URL.
+export async function reenqueueStale(olderThanMs = 14 * 24 * 3600 * 1000, limit = 50) {
+  if (!(await tryLoadSqlite())) return 0;
+  const cutoff = now() - olderThanMs;
+  const rows = db
+    .prepare("SELECT url FROM pages WHERE (indexed_at IS NULL OR indexed_at < ?) ORDER BY indexed_at ASC LIMIT ?")
+    .all(cutoff, limit);
+  let n = 0;
+  for (const r of rows) {
+    const dead = db.prepare("SELECT 1 FROM dead_urls WHERE url = ?").get(r.url);
+    if (dead) continue;
+    db.prepare(
+      "INSERT OR IGNORE INTO crawl_queue(url, added_at, attempts, next_attempt_at) VALUES(?, ?, 0, 0)"
+    ).run(r.url, now());
+    n += 1;
+  }
+  return n;
 }
 
 export async function upsertUser({ email, name, provider, sub }) {
@@ -291,6 +380,9 @@ export async function stats() {
     persistent: false,
     pages: 0,
     queue: 0,
+    queueReady: 0,
+    queueBackoff: 0,
+    dead: 0,
     answers: 0,
     added: sessionAdded,
     uptimeMs: now() - sessionStart,
@@ -299,6 +391,9 @@ export async function stats() {
     base.persistent = true;
     base.pages = db.prepare("SELECT COUNT(*) AS c FROM pages").get().c;
     base.queue = db.prepare("SELECT COUNT(*) AS c FROM crawl_queue").get().c;
+    base.queueReady = db.prepare("SELECT COUNT(*) AS c FROM crawl_queue WHERE next_attempt_at IS NULL OR next_attempt_at <= ?").get(now()).c;
+    base.queueBackoff = base.queue - base.queueReady;
+    base.dead = db.prepare("SELECT COUNT(*) AS c FROM dead_urls").get().c;
     base.answers = db.prepare("SELECT COUNT(*) AS c FROM answers").get().c;
   }
   return base;
