@@ -1,31 +1,32 @@
-// server.js
+// Node entrypoint — used by Render, Railway, Fly, Docker, bare VPS.
+// Boots the Hono app, starts the private crawler when SQLite is available,
+// and wires up the GitHub-branch-based index snapshot/restore so the crawl
+// index survives Render free-tier restarts with zero external storage.
 
-const express = require('express');
-const request = require('request');
-const app = express();
-const PORT = process.env.PORT || 3000;
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { buildApp } from "./src/app.js";
+import { startCrawler } from "./src/crawler.js";
+import { startIndexSync } from "./src/git_sync.js";
 
-const searchEngines = {
-    brave: 'https://www.brave.com/search',
-    duckduckgo: 'https://duckduckgo.com/',
-    google: 'https://www.google.com/search',
-    searxng: 'https://searxng.example.org/search',
-    bing: 'https://www.bing.com/search'
-};
+const app = buildApp();
 
-app.use(express.json());
+// Static frontend. `serveStatic` handles everything under ./public; anything
+// else falls through to index.html so client-side routing keeps working.
+app.use("/*", serveStatic({ root: "./public" }));
+app.get("*", serveStatic({ path: "./public/index.html" }));
 
-app.get('/search', (req, res) => {
-    const { query, engine } = req.query;
-    const url = searchEngines[engine];
-    if (!url) return res.status(400).json({ error: 'Invalid search engine' });
-    
-    request({ url: `${url}?q=${encodeURIComponent(query)}` }, (error, response, body) => {
-        if (error) return res.status(500).json({ error: 'Failed to fetch results' });
-        res.send(body);
-    });
-});
+const port = Number(process.env.PORT) || 3000;
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+// Restore the SQLite index from the data branch (if configured) BEFORE the
+// crawler starts writing to it.
+startIndexSync()
+  .catch((err) => console.error("index-sync init failed:", err?.message || err))
+  .finally(() => {
+    startCrawler(5000);
+  });
+
+serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
+  // Intentionally minimal — no request logging (privacy).
+  console.log(`Atomic Search listening on http://localhost:${info.port}`);
 });

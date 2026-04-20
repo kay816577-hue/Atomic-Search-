@@ -18,9 +18,12 @@ import {
   stats as storageStats,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
+import { buildAuthRoutes, currentUser } from "./auth.js";
+import { scanDownload } from "./scan.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
+const SAFETY_TTL = 60 * 60 * 1000; // 1h (under the 24h cache in safety.js)
 
 function privacyHeaders() {
   return {
@@ -46,6 +49,28 @@ function growIndex(results, cap = 12) {
   } catch { /* ignore */ }
 }
 
+// Score an own-index row against the query so we can boost strong matches
+// above meta-search results. Simple but effective:
+// - +3 for every distinct query token found in title
+// - +1 for every distinct query token found in text
+// - +2 bonus if the whole phrase appears in title
+// - small recency bonus
+function scoreOwnIndexRow(row, query) {
+  const q = (query || "").toLowerCase();
+  const title = (row.title || "").toLowerCase();
+  const text = (row.text || "").toLowerCase();
+  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
+  let score = 0;
+  for (const t of tokens) {
+    if (title.includes(t)) score += 3;
+    if (text.includes(t)) score += 1;
+  }
+  if (q.length >= 4 && title.includes(q)) score += 2;
+  const age = Math.max(0, Date.now() - (row.indexed_at || 0));
+  if (age < 7 * 24 * 3600 * 1000) score += 0.5; // fresh
+  return score;
+}
+
 export function buildApp() {
   const app = new Hono();
 
@@ -61,35 +86,50 @@ export function buildApp() {
 
   app.get("/api/search", async (c) => {
     const q = (c.req.query("q") || "").trim();
-    if (!q) return c.json({ query: "", results: [], engines: {}, page: 1, hasMore: false });
+    if (!q) return c.json({ query: "", results: [], page: 1, hasMore: false });
     const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
-    const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 100));
+    const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
     const cached = await cacheGet(key);
     if (cached) return c.json({ ...cached, cached: true });
 
-    // Own-index matches — promoted only on page 1.
-    const own = page === 1 ? await searchPages(q, 10).catch(() => []) : [];
-    const result = await metaSearch(q, { page, perPage });
-    if (own.length) {
-      const ownFormatted = own.map((p) => ({
+    // Own-index matches — fetched on every page so strong in-index results
+    // always surface. Ranked and capped; only the top few are promoted.
+    const ownRaw = await searchPages(q, 30).catch(() => []);
+    const ownRanked = ownRaw
+      .map((p) => ({
         url: p.url,
         host: p.host,
         title: p.title,
         snippet: (p.text || "").slice(0, 240),
-        engines: ["atomic"],
-        score: 2,
-      }));
-      const seen = new Set(ownFormatted.map((x) => x.url));
-      result.results = [
-        ...ownFormatted,
-        ...result.results.filter((x) => !seen.has(x.url)),
-      ].slice(0, perPage);
+        engines: ["atomic-index"],
+        score: scoreOwnIndexRow(p, q),
+        ownIndex: true,
+      }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const meta = await metaSearch(q, { page, perPage });
+
+    const seen = new Set();
+    const promoted = [];
+    // On page 1 promote the top 5 own-index matches; on later pages keep any
+    // strong match (score >= 4) that wasn't surfaced yet.
+    const promoteLimit = page === 1 ? 5 : 12;
+    const threshold = page === 1 ? 0 : 4;
+    for (const r of ownRanked.slice(0, promoteLimit)) {
+      if (r.score < threshold) break;
+      if (seen.has(r.url)) continue;
+      seen.add(r.url);
+      promoted.push(r);
     }
-    await cacheSet(key, result, SEARCH_TTL);
-    // Auto-grow our index from top meta-results.
-    growIndex(result.results);
-    return c.json(result);
+    const metaFiltered = meta.results.filter((r) => !seen.has(r.url));
+
+    const merged = [...promoted, ...metaFiltered].slice(0, perPage);
+    const out = { ...meta, results: merged, ownIndexCount: promoted.length };
+    await cacheSet(key, out, SEARCH_TTL);
+    growIndex(merged);
+    return c.json(out);
   });
 
   app.get("/api/images", async (c) => {
@@ -103,23 +143,40 @@ export function buildApp() {
     return c.json(data);
   });
 
+  // AI endpoint — opt-in. Clients only hit this when the user has AI enabled.
   app.post("/api/ai", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const q = (body.q || c.req.query("q") || "").trim();
     if (!q) return c.json({ query: "", answer: "", sources: [] });
     // Reuse the page-1 search cache if present — avoids a second full fan-out.
-    const cacheKey = `search:${q.toLowerCase()}:p1:n100`;
+    const cacheKey = `search:${q.toLowerCase()}:p1:n50`;
     const cached = await cacheGet(cacheKey);
     let results;
     if (cached?.results?.length) {
       results = cached.results;
     } else {
-      const search = await metaSearch(q, { page: 1, perPage: 100 });
+      const search = await metaSearch(q, { page: 1, perPage: 50 });
       await cacheSet(cacheKey, search, SEARCH_TTL);
       results = search.results;
     }
     const answer = await aiAnswer(q, results);
     return c.json(answer);
+  });
+  // GET alias so the frontend can use a simple fetch + no preflight.
+  app.get("/api/ai", async (c) => {
+    const q = (c.req.query("q") || "").trim();
+    if (!q) return c.json({ query: "", answer: "", sources: [] });
+    const cacheKey = `search:${q.toLowerCase()}:p1:n50`;
+    const cached = await cacheGet(cacheKey);
+    let results;
+    if (cached?.results?.length) {
+      results = cached.results;
+    } else {
+      const search = await metaSearch(q, { page: 1, perPage: 50 });
+      await cacheSet(cacheKey, search, SEARCH_TTL);
+      results = search.results;
+    }
+    return c.json(await aiAnswer(q, results));
   });
 
   app.post("/api/submit", async (c) => {
@@ -130,39 +187,23 @@ export function buildApp() {
     return c.json({ ok: true });
   });
 
-  app.get("/api/music/search", async (c) => {
-    const q = (c.req.query("q") || "").trim();
-    if (!q) return c.json({ tracks: [] });
-    const host = "https://discoveryprovider.audius.co";
-    const r = await fetch(`${host}/v1/tracks/search?query=${encodeURIComponent(q)}&app_name=AtomicSearch`).catch(() => null);
-    if (!r || !r.ok) return c.json({ tracks: [] });
-    const data = await r.json().catch(() => ({}));
-    const tracks = (data.data || []).slice(0, 30).map((t) => ({
-      id: t.id,
-      title: t.title,
-      artist: t.user?.name || t.user?.handle || "Unknown",
-      duration: t.duration,
-      artwork: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
-      streamUrl: `${host}/v1/tracks/${t.id}/stream?app_name=AtomicSearch`,
-      permalink: t.permalink ? `https://audius.co${t.permalink}` : null,
-    }));
-    return c.json({ tracks });
-  });
-
-  app.get("/api/music/trending", async (c) => {
-    const host = "https://discoveryprovider.audius.co";
-    const r = await fetch(`${host}/v1/tracks/trending?app_name=AtomicSearch`).catch(() => null);
-    if (!r || !r.ok) return c.json({ tracks: [] });
-    const data = await r.json().catch(() => ({}));
-    const tracks = (data.data || []).slice(0, 30).map((t) => ({
-      id: t.id,
-      title: t.title,
-      artist: t.user?.name || t.user?.handle || "Unknown",
-      duration: t.duration,
-      artwork: t.artwork?.["480x480"] || t.artwork?.["150x150"] || null,
-      streamUrl: `${host}/v1/tracks/${t.id}/stream?app_name=AtomicSearch`,
-    }));
-    return c.json({ tracks });
+  // Batch safety lookup — clients call this with up to 20 URLs at a time so
+  // we can overlay a risk dot on each result card without a request-per-URL.
+  app.post("/api/safety/batch", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const urls = Array.isArray(body.urls) ? body.urls.slice(0, 20) : [];
+    const results = await Promise.all(
+      urls.map(async (u) => {
+        if (!isSafeUrl(u)) return { url: u, verdict: "unknown" };
+        const ck = `safetyapi:${u}`;
+        const cached = await cacheGet(ck);
+        if (cached) return { url: u, ...cached, cached: true };
+        const s = await safetyCheck(u);
+        await cacheSet(ck, s, SAFETY_TTL);
+        return { url: u, ...s };
+      })
+    );
+    return c.json({ results });
   });
 
   // Safety check — returns a VT verdict for a URL. Called by the /go
@@ -174,7 +215,7 @@ export function buildApp() {
     const cached = await cacheGet(cacheKey);
     if (cached) return c.json({ url, ...cached, cached: true });
     const summary = await safetyCheck(url);
-    await cacheSet(cacheKey, summary, 10 * 60 * 1000);
+    await cacheSet(cacheKey, summary, SAFETY_TTL);
     return c.json({ url, ...summary });
   });
 
@@ -194,10 +235,10 @@ export function buildApp() {
     try { host = new URL(target).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
     const summary = await safetyCheck(target);
     const verdict = summary.verdict || "unknown";
-    const color = verdict === "clean" ? "#2ecc71"
-      : verdict === "suspicious" ? "#f39c12"
-      : verdict === "malicious" ? "#e74c3c"
-      : "#7f8c8d";
+    const color = verdict === "clean" ? "#16a34a"
+      : verdict === "suspicious" ? "#f59e0b"
+      : verdict === "malicious" ? "#dc2626"
+      : "#6b7280";
     const blurb = verdict === "clean" ? `No security vendors flagged this URL.`
       : verdict === "suspicious" ? `${summary.suspicious || 0} vendor(s) flagged this URL as suspicious.`
       : verdict === "malicious" ? `${summary.malicious || 0} vendor(s) flagged this URL as malicious.`
@@ -211,8 +252,9 @@ export function buildApp() {
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Safety check — Atomic Search</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="/css/styles.css">
+<meta name="referrer" content="no-referrer">
 <link rel="stylesheet" href="/css/themes.css">
+<link rel="stylesheet" href="/css/styles.css">
 </head><body data-theme="atom-dark" class="interstitial">
 <main style="max-width:640px;margin:60px auto;padding:28px;">
   <h1 style="margin-top:0">Safety check</h1>
@@ -240,6 +282,23 @@ export function buildApp() {
   app.all("/proxy", async (c) => {
     const url = c.req.query("url") || "";
     return proxyHandler(url);
+  });
+
+  // Auth routes (Google OAuth + email magic link). No-op if not configured.
+  app.route("/", buildAuthRoutes());
+
+  // Download safety scanner. Logged-in only; falls back to a friendly error
+  // if there's no VT key.
+  app.post("/api/scan/file", async (c) => {
+    const user = await currentUser(c);
+    if (!user) {
+      return c.json({ ok: false, error: "Sign in to use the download scanner." }, 401);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const url = (body.url || "").trim();
+    if (!url) return c.json({ ok: false, error: "Missing URL." }, 400);
+    const out = await scanDownload(url);
+    return c.json(out);
   });
 
   return app;

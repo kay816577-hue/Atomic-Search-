@@ -1,7 +1,7 @@
 {
   "name": "atomic-search",
-  "version": "1.0.0",
-  "description": "Atomic Search — privacy-first meta-search engine aggregating DuckDuckGo, Bing, Brave and Luxxle through an anonymising proxy. No trackers, no logs.",
+  "version": "2.0.0",
+  "description": "Atomic Search — privacy-first search with its own growing anonymous index. No trackers, no logs, no history.",
   "private": true,
   "type": "module",
   "main": "server.js",
@@ -18,7 +18,8 @@
     "linkedom": "^0.18.5"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^11.5.0"
+    "better-sqlite3": "^11.5.0",
+    "nodemailer": "^6.9.16"
   },
   "engines": {
     "node": ">=18"

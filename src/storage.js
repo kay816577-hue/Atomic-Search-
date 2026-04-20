@@ -74,6 +74,16 @@ async function tryLoadSqlite() {
         url TEXT PRIMARY KEY,
         submitted_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        name TEXT,
+        provider TEXT,
+        sub TEXT,
+        created_at INTEGER,
+        last_login INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS users_email_idx ON users(email);
     `);
     sqlite = true;
     return true;
@@ -124,14 +134,28 @@ export async function insertPage({ url, title, text, host }) {
 
 export async function searchPages(q, limit = 20) {
   if (!(await tryLoadSqlite())) return [];
-  const like = `%${q}%`;
+  const terms = (q || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2)
+    .slice(0, 6);
+  if (!terms.length) return [];
+  // Match if EVERY token appears in title OR text. Avoids giant OR fan-outs
+  // while still catching partial matches across title+body.
+  const where = terms.map(() => `(LOWER(title) LIKE ? OR LOWER(text) LIKE ?)`).join(" AND ");
+  const params = [];
+  for (const t of terms) {
+    const like = `%${t}%`;
+    params.push(like, like);
+  }
   const rows = db
     .prepare(
-      `SELECT url, title, text, host FROM pages
-       WHERE title LIKE ? OR text LIKE ?
+      `SELECT url, title, text, host, indexed_at FROM pages
+       WHERE ${where}
        ORDER BY indexed_at DESC LIMIT ?`
     )
-    .all(like, like, limit);
+    .all(...params, limit);
   return rows;
 }
 
@@ -161,6 +185,48 @@ export async function enqueueCrawl(url) {
   ).run(url, now());
   return true;
 }
+
+export async function upsertUser({ email, name, provider, sub }) {
+  if (!(await tryLoadSqlite())) {
+    // In-memory fallback so sessions at least work in this process.
+    _memUsers = _memUsers || new Map();
+    let u = _memUsers.get(email);
+    if (!u) {
+      u = { id: _memUsers.size + 1, email, name, provider, sub, created_at: now(), last_login: now() };
+      _memUsers.set(email, u);
+    } else {
+      u.last_login = now();
+      u.name = name || u.name;
+      u.provider = provider || u.provider;
+    }
+    return u;
+  }
+  const existing = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  if (existing) {
+    db.prepare("UPDATE users SET name = COALESCE(?, name), provider = COALESCE(?, provider), sub = COALESCE(?, sub), last_login = ? WHERE id = ?")
+      .run(name || null, provider || null, sub || null, now(), existing.id);
+    return db.prepare("SELECT * FROM users WHERE id = ?").get(existing.id);
+  }
+  const res = db.prepare("INSERT INTO users(email, name, provider, sub, created_at, last_login) VALUES(?, ?, ?, ?, ?, ?)")
+    .run(email, name || null, provider || null, sub || null, now(), now());
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(res.lastInsertRowid);
+}
+
+export async function getUserById(id) {
+  if (!(await tryLoadSqlite())) {
+    if (!_memUsers) return null;
+    for (const u of _memUsers.values()) if (u.id === Number(id)) return u;
+    return null;
+  }
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(Number(id)) || null;
+}
+
+export async function getUserByEmail(email) {
+  if (!(await tryLoadSqlite())) return _memUsers ? _memUsers.get(email) || null : null;
+  return db.prepare("SELECT * FROM users WHERE email = ?").get(email) || null;
+}
+
+let _memUsers = null;
 
 export async function stats() {
   const base = { cacheEntries: lru.size(), persistent: false, pages: 0, queue: 0 };

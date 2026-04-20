@@ -1,22 +1,24 @@
 # Atomic Search
 
-A privacy-first meta-search engine that aggregates results from
-**DuckDuckGo · Bing · Brave · Luxxle** (via a public SearXNG instance) into
-one ranked list, proxies every outbound click to hide your IP/referrer, and
-ships with an optional **AI answer** mode powered by open-source LLMs.
+A privacy-first search engine with its own growing anonymous index. One
+search box, clean Google-style UI, zero tracking.
 
-- **No trackers.** No cookies. No referrer. No analytics. No logs of queries.
-- **One search, every engine.** Rank-fused results, de-duplicated by URL.
-- **Proxied clicks.** Outbound links go through `/proxy?url=…` so the target
-  site never sees your IP. HTML is rewritten so embedded links stay proxied.
-- **Images tab** — DuckDuckGo + Bing image search merged.
-- **AI mode** — extractive summary by default; optional open-source LLMs
-  (HuggingFace Inference, Ollama, LM Studio, any OpenAI-compatible endpoint).
-- **Growing index** — when running on Node with a writable disk, Atomic Search
-  also runs its own background crawler and caches results in SQLite.
-- **Integrated Wavesound player** — floating music player that streams
-  royalty-free tracks from the Audius open network.
-- **Themes** — Atom Dark, Atom Light, Neon, Dracula, Solar.
+- **No trackers.** No cookies, no referrer, no analytics, no logs of queries.
+- **Our own index.** A background crawler builds an SQLite index of the pages
+  Atomic surfaces; strong matches from the index are promoted above everything
+  else. The index grows with every search.
+- **Persistent across restarts.** On Render's free tier (no persistent disk)
+  Atomic snapshots its index to a data branch of this GitHub repo and restores
+  it on boot — no external storage service needed.
+- **Anonymous view.** Every outbound click can optionally be rewritten to pass
+  through Atomic so the destination never sees your IP.
+- **Safety checks.** A coloured dot on each result shows whether VirusTotal
+  has flagged it. A `/go` interstitial runs the full check before you leave.
+- **Download scanner.** Signed-in users can paste any download URL and get a
+  VirusTotal verdict across 70+ antivirus engines.
+- **Optional AI answers** — off by default. Extractive summaries over our own
+  index with zero config; pluggable HuggingFace / OpenAI-compatible backends.
+- **12 themes** and a proper settings page.
 
 ## Run it locally
 
@@ -26,80 +28,56 @@ npm start
 # open http://localhost:3000
 ```
 
-Node ≥ 18 required. `better-sqlite3` is an *optional* dependency — if it fails
-to build (rare), Atomic Search falls back to an in-memory cache and everything
-still works; only the growing on-disk index is skipped.
+Node ≥ 18 required.
 
-## Deploy anywhere
+## Deploy
 
-Atomic Search is built with [Hono](https://hono.dev), so the same app runs on
-Node, Cloudflare Workers/Pages and Vercel serverless.
+| Platform         | How                                                                 |
+| ---------------- | ------------------------------------------------------------------- |
+| Render           | Connect the repo; `render.yaml` handles the rest                    |
+| Vercel           | Connect the repo; uses `api/[[...slug]].js` + static `public/`      |
+| Cloudflare Pages | Connect the repo; `wrangler.toml` + `functions/[[path]].js`         |
+| Docker / VPS     | `docker build . && docker run -p 3000:3000 atomic-search`           |
 
-### Render
-[`render.yaml`](./render.yaml) is ready to go. Click "New +" → "Blueprint" →
-point it at this repo. Includes a 1 GB persistent disk so the crawler index
-survives restarts.
+### Environment variables (all optional)
 
-### Vercel
-Just import the repo. [`vercel.json`](./vercel.json) routes `/api/*` and
-`/proxy` to [`api/[[...slug]].js`](./api/[[...slug]].js) (the Hono app) and
-serves `public/` statically. In serverless mode, the cache is in-memory per
-instance (no persistent crawler).
+| Variable | Purpose |
+| --- | --- |
+| `VIRUSTOTAL_API_KEY` | Enables URL + download safety checks |
+| `GH_INDEX_PAT` | GitHub PAT (`contents:write`) that lets Atomic snapshot its SQLite index to a data branch so it survives restarts on Render free tier |
+| `GH_INDEX_REPO` | Override the repo used for snapshots (default: this repo) |
+| `GH_INDEX_BRANCH` | Branch name for snapshots (default `atomic-search-index`) |
+| `GH_INDEX_INTERVAL` | Snapshot interval in seconds (default 600) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Enable "Continue with Google" sign-in. Redirect URI must be `https://<host>/api/auth/google/callback` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Enable email sign-in ("send me a link") |
+| `ATOMIC_SESSION_SECRET` | Long random string for signing session cookies |
+| `HF_API_TOKEN` / `OPENAI_API_KEY` / `OPENAI_API_BASE` / `OPENAI_MODEL` | Optional AI backends |
+| `DATA_DIR` | Where to put the SQLite db (default `./data`) |
+| `PORT` | Server port (default 3000) |
 
-### Cloudflare Pages
-Connect the repo in the Cloudflare dashboard. Build command: `npm install`.
-Output directory: `public`. Pages Functions from
-[`functions/[[path]].js`](./functions/[[path]].js) handle `/api/*` and
-`/proxy`. [`wrangler.toml`](./wrangler.toml) sets the `nodejs_compat` flag.
+Without any of these, Atomic still runs end-to-end: extractive AI, no safety
+badges, no sign-in, ephemeral index.
 
-### Docker / anywhere else
-```bash
-docker build -t atomic-search .
-docker run -p 3000:3000 -v atomic-data:/data atomic-search
-```
+## How the index works
 
-## Environment variables
-
-All optional. Defaults to zero-config.
-
-| Variable            | Purpose                                                                 |
-|---------------------|-------------------------------------------------------------------------|
-| `PORT`              | HTTP port for the Node server (default `3000`).                         |
-| `DATA_DIR`          | Where to store the SQLite DB (default `./data`).                        |
-| `SEARXNG_URL`       | SearXNG instance used as the "Luxxle" slot (default `https://searx.be`).|
-| `HF_API_TOKEN`      | Enables open-source LLM answers via HuggingFace Inference.              |
-| `HF_MODEL`          | HF model id (default `HuggingFaceH4/zephyr-7b-beta`).                   |
-| `OPENAI_BASE_URL`   | OpenAI-compatible endpoint (Ollama, LM Studio, groq, together.ai, …).   |
-| `OPENAI_API_KEY`    | Optional auth for the above.                                            |
-| `OPENAI_MODEL`      | Model name for the OpenAI-compatible endpoint (default `llama3`).       |
-| `VIRUSTOTAL_API_KEY`| Enables VirusTotal safety check on every outbound click (free tier, 500 req/day). Grab one at https://www.virustotal.com/gui/my-apikey. |
-
-## Architecture
-
-```
-public/                static SPA (themes, tabs, music player)
-src/
-  app.js               Hono app (routes: /api/*, /proxy)
-  aggregator.js        DDG + Bing + Brave + Luxxle meta-search, RRF merge
-  images.js            DDG + Bing image search
-  ai.js                extractive summary + optional LLM
-  proxy.js             anonymising URL proxy (HTML rewriter)
-  storage.js           LRU cache (everywhere) + SQLite (Node only)
-  crawler.js           Node-only background crawler
-  util.js              fetch helpers, sanitisers
-server.js              Node entrypoint (Render/Docker/VPS)
-api/[[...slug]].js     Vercel entrypoint
-functions/[[path]].js  Cloudflare Pages Functions entrypoint
-```
+1. You search. Atomic fans out across multiple public search endpoints.
+2. Results are rank-fused, de-duplicated, and any strong matches from our own
+   indexed pages are promoted to the top.
+3. The top result URLs are added to the crawl queue. A background worker pulls
+   from that queue every 5 seconds, fetches the page, strips it to plain text,
+   and writes it to SQLite.
+4. On Render, every 10 minutes we commit the SQLite db to the data branch of
+   this repo. On boot we restore it before the crawler starts writing.
 
 ## Privacy
 
-- No request logging. We do not write IPs, user-agents, or queries to disk.
-- The proxy strips `Cookie`, `Authorization`, `Referer`, `X-Forwarded-For`
-  and similar headers **on the way out**, and `Set-Cookie` on the way back.
-- Every response carries `Referrer-Policy: no-referrer` and
-  `Permissions-Policy: interest-cohort=(), browsing-topics=()`.
-- The in-memory LRU caches only the query → results mapping; persistent
-  SQLite caches only crawled pages and submitted URLs.
+- Query strings are never logged.
+- IP addresses, user-agents, and referrers are never stored.
+- Outbound HTML fetched through the anonymous view has tracking scripts
+  neutered and links rewritten to stay inside the view.
+- The cookie used for sign-in is HMAC-signed, HTTP-only, SameSite=Lax, and
+  contains only a numeric user id + expiry.
 
-Contributions welcome.
+## License
+
+MIT.
