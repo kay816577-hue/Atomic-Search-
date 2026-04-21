@@ -114,35 +114,170 @@ const STOPWORDS = new Set([
   "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
   "from", "what", "who", "why", "how", "do", "does", "did",
 ]);
+// Cap how many results from a single host can appear in the top N, so
+// one domain can't monopolise the top of the page even if it genuinely
+// has many relevant pages. Results that exceed the cap get pushed below
+// the top window (they're still returned, just ranked lower).
+function diversifyByHost(list, opts = {}) {
+  const topWindow = Math.max(5, Number(opts.topWindow) || 20);
+  const perHost = Math.max(1, Number(opts.perHost) || 2);
+  const head = [];
+  const tail = [];
+  const counts = new Map();
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
+  for (const r of list) {
+    if (head.length >= topWindow) { tail.push(r); continue; }
+    const h = hostOf(r.url);
+    const n = counts.get(h) || 0;
+    if (h && n >= perHost) { tail.push(r); continue; }
+    head.push(r);
+    if (h) counts.set(h, n + 1);
+  }
+  return [...head, ...tail];
+}
+
+// Generate related-search suggestions from the query + top titles. Pure
+// heuristic — no external API. Picks common intent-expanding suffixes
+// and lifts out noun-ish tokens from top result titles so users see
+// refinements that actually exist in the corpus, not random guesses.
+const RELATED_SUFFIXES = [
+  "tutorial",
+  "explained",
+  "examples",
+  "vs",
+  "documentation",
+  "open source",
+  "github",
+  "wikipedia",
+];
+function buildRelated(q, results) {
+  if (!q || q.length < 2) return [];
+  const base = q.trim();
+  const out = new Set();
+  for (const suf of RELATED_SUFFIXES) {
+    if (out.size >= 6) break;
+    if (!base.toLowerCase().includes(suf)) out.add(`${base} ${suf}`);
+  }
+  // Mine prominent non-stopword tokens from top 5 titles as query expansions.
+  const seenTok = new Set(base.toLowerCase().split(/\s+/));
+  const tokFreq = new Map();
+  for (const r of (results || []).slice(0, 8)) {
+    const words = String(r?.title || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    for (const w of words) {
+      if (w.length < 4 || STOPWORDS.has(w) || seenTok.has(w)) continue;
+      tokFreq.set(w, (tokFreq.get(w) || 0) + 1);
+    }
+  }
+  const topTok = [...tokFreq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  for (const [w] of topTok) {
+    if (out.size >= 8) break;
+    out.add(`${base} ${w}`);
+  }
+  return [...out];
+}
+
+// "Did you mean" — fires only when the user's query has zero strong
+// matches in the merged result set OR when a single top-ranked result
+// title has a close-but-not-exact match. This stays honest: we never
+// invent a correction; we only surface one that exists in our corpus.
+function buildDidYouMean(q, results) {
+  if (!q) return null;
+  const lower = q.toLowerCase().trim();
+  // If any top-3 title starts with the same word sequence as the query,
+  // there's nothing to suggest.
+  for (const r of (results || []).slice(0, 3)) {
+    const t = String(r?.title || "").toLowerCase();
+    if (t.includes(lower)) return null;
+  }
+  // Fuzzy-match against top title tokens. Small edit distance over the
+  // FIRST word of each title, looking for a near-match to the first
+  // query token.
+  const firstQ = lower.split(/\s+/)[0] || "";
+  if (firstQ.length < 4) return null;
+  let best = null;
+  for (const r of (results || []).slice(0, 10)) {
+    const firstT = String(r?.title || "").toLowerCase().split(/\s+/)[0] || "";
+    if (!firstT || firstT === firstQ) continue;
+    const d = levenshtein(firstQ, firstT);
+    if (d <= 0 || d > 2) continue;
+    if (!best || d < best.d) best = { d, word: firstT };
+  }
+  if (!best) return null;
+  const suggested = q.replace(new RegExp("^" + firstQ, "i"), best.word);
+  return { suggested, original: q };
+}
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const row = new Array(n + 1);
+  for (let j = 0; j <= n; j++) row[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = row[j];
+      row[j] = a[i - 1] === b[j - 1]
+        ? prev
+        : 1 + Math.min(prev, row[j - 1], row[j]);
+      prev = tmp;
+    }
+  }
+  return row[n];
+}
+
 function scoreOwnIndexRow(row, query) {
   const q = (query || "").toLowerCase().trim();
   if (!q) return 0;
   const title = (row.title || "").toLowerCase();
   const text = (row.text || "").toLowerCase();
+  const host = (row.host || "").toLowerCase();
+  const url = (row.url || "").toLowerCase();
   const rawTokens = q.split(/\s+/).filter((t) => t.length >= 2);
   const tokens = rawTokens.filter((t) => !STOPWORDS.has(t));
   const denom = Math.max(1, tokens.length || rawTokens.length);
+  const effTokens = tokens.length ? tokens : rawTokens;
 
   let titleHits = 0;
   let textHits = 0;
-  for (const t of (tokens.length ? tokens : rawTokens)) {
+  let hostHits = 0;
+  let urlHits = 0;
+  for (const t of effTokens) {
     if (title.includes(t)) titleHits += 1;
     if (text.includes(t)) textHits += 1;
+    if (host.includes(t)) hostHits += 1;
+    else if (url.includes(t)) urlHits += 1;
   }
   const titleCoverage = titleHits / denom;
   const textCoverage = textHits / denom;
+  const hostCoverage = hostHits / denom;
 
-  // Base score: title dominates (~5x body) and we reward full coverage
-  // super-linearly so "all tokens in title" >> "half the tokens".
-  let score = titleCoverage * 10 + textCoverage * 2;
-  if (titleCoverage === 1) score += 3; // all tokens present in title
+  // Base score: title dominates (~5x body). Host matches worth a lot —
+  // a token appearing in the domain name is a very strong intent signal
+  // (e.g. query "wikipedia" vs host en.wikipedia.org).
+  let score = titleCoverage * 12 + textCoverage * 2 + hostCoverage * 6 + (urlHits / denom) * 1.5;
+  if (titleCoverage === 1) score += 4; // all tokens present in title
+  if (hostCoverage === 1 && denom <= 3) score += 2;
   if (textCoverage === 1) score += 1;
 
   // Phrase proximity — the whole query showing up verbatim is a strong
   // signal, especially in the title.
   if (q.length >= 4) {
-    if (title.includes(q)) score += 4;
-    else if (text.includes(q)) score += 1.5;
+    if (title.includes(q)) score += 5;
+    else if (text.includes(q)) score += 2;
+  }
+
+  // Adjacent-token bonus: if two query tokens appear within a short
+  // window in the title, that's a much tighter match than two random
+  // tokens 40 words apart. We approximate this by checking each
+  // consecutive pair as a bigram in the title.
+  if (effTokens.length >= 2) {
+    for (let i = 0; i < effTokens.length - 1; i++) {
+      const bigram = effTokens[i] + " " + effTokens[i + 1];
+      if (title.includes(bigram)) score += 1.5;
+      else if (text.includes(bigram)) score += 0.5;
+    }
   }
 
   // Title-length prior: a 3-word title with all 3 tokens is a much
@@ -151,9 +286,20 @@ function scoreOwnIndexRow(row, query) {
   const titleLen = Math.max(1, title.split(/\s+/).length);
   if (titleHits === denom && titleLen <= denom * 3) score += 1.5;
 
+  // Authoritative-host bonus. These are broad reference hubs we trust
+  // more than a random blog — a match there is worth extra. Tiny list
+  // on purpose; full domain reputation is out of scope.
+  const AUTH_HOSTS = /(^|\.)(wikipedia\.org|github\.com|mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org|wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com)$/;
+  if (AUTH_HOSTS.test(host)) score += 1;
+
   // Small freshness bonus — pages crawled in the last week.
   const age = Math.max(0, Date.now() - (row.indexed_at || 0));
   if (age < 7 * 24 * 3600 * 1000) score += 0.5;
+  else if (age > 90 * 24 * 3600 * 1000) score -= 0.3; // stale penalty
+
+  // Thin-body penalty: we already reject <200-char bodies at insert
+  // time, but older rows may slip through. Nudge them down.
+  if ((row.text || "").length < 400) score -= 0.5;
 
   return score;
 }
@@ -192,7 +338,24 @@ export function buildApp() {
   });
 
   app.get("/api/search", async (c) => {
-    const q = (c.req.query("q") || "").trim();
+    const qRaw = (c.req.query("q") || "").trim();
+    if (!qRaw) return c.json({ query: "", results: [], page: 1, hasMore: false });
+    // Support Google-style `site:domain.com` operator. We strip it from the
+    // query before running meta / own-index search (so it doesn't pollute
+    // token scoring) and then post-filter every result to that host suffix.
+    // Multiple site: operators are ANDed, but pragmatically 1 is the norm.
+    let siteFilter = null;
+    const q = qRaw.replace(/\bsite:([\w.-]+)/gi, (_m, host) => {
+      siteFilter = (siteFilter || []).concat([host.toLowerCase()]);
+      return "";
+    }).replace(/\s+/g, " ").trim();
+    const matchesSite = (url) => {
+      if (!siteFilter) return true;
+      try {
+        const h = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+        return siteFilter.some((s) => h === s || h.endsWith("." + s));
+      } catch { return false; }
+    };
     if (!q) return c.json({ query: "", results: [], page: 1, hasMore: false });
     // NSFW-intent queries get zero results. This is deliberate and not a
     // soft "safe search toggle" — the engine refuses to serve adult content
@@ -251,11 +414,15 @@ export function buildApp() {
         rest.push(r);
       }
       ownTopFresh.sort((a, b) => (b.score || 0) - (a.score || 0));
-      const mergedFresh = [...ownTopFresh, ...rest].slice(0, perPage);
+      const filteredFresh = [...ownTopFresh, ...rest].filter((r) => matchesSite(r.url));
+      const diversifiedFresh = diversifyByHost(filteredFresh, { topWindow: 20, perHost: 2 });
+      const mergedFresh = diversifiedFresh.slice(0, perPage);
       const ownIndexCount = mergedFresh.filter((r) => r.ownIndex).length;
+      const relatedFresh = buildRelated(q, mergedFresh);
+      const didYouMeanFresh = mergedFresh.length === 0 ? null : buildDidYouMean(q, mergedFresh);
       // Fire-and-forget: keep growing the index on repeat searches too.
       growIndex(mergedFresh).catch(() => {});
-      return c.json({ ...cached, results: mergedFresh, ownIndexCount, cached: true });
+      return c.json({ ...cached, query: q, results: mergedFresh, ownIndexCount, related: relatedFresh, didYouMean: didYouMeanFresh, siteFilter, cached: true });
     }
 
     // Cold path: first time we've seen this query (in this cache window).
@@ -319,11 +486,25 @@ export function buildApp() {
     }
 
     const ordered = [...ownTop, ...wikiHead, ...metaRest, ...wikiRest, ...ownTail]
-      .filter((r) => !isNsfwResult(r));
-    const merged = ordered.slice(0, perPage);
+      .filter((r) => !isNsfwResult(r))
+      .filter((r) => matchesSite(r.url));
+
+    // Google-like domain diversity: in the top 20 positions, cap any single
+    // host to 2 results so one domain can't monopolise the fold. Remaining
+    // hits from that host still appear lower down — we just don't let them
+    // stack. Wikipedia knowledge cards are exempt (they're already deduped).
+    const diversified = diversifyByHost(ordered, { topWindow: 20, perHost: 2 });
+
+    const merged = diversified.slice(0, perPage);
     const ownIndexCount = merged.filter((r) => r.ownIndex).length;
 
-    const out = { ...meta, results: merged, ownIndexCount };
+    // Did-you-mean + related searches are cheap and helpful hints. Neither
+    // requires a separate API call — both are derived from the query itself
+    // and the titles of the top results.
+    const related = buildRelated(q, merged);
+    const didYouMean = merged.length === 0 ? null : buildDidYouMean(q, merged);
+
+    const out = { ...meta, query: q, results: merged, ownIndexCount, related, didYouMean, siteFilter };
     await cacheSet(key, out, SEARCH_TTL);
     // The eager slice already awaited top-5; fire-and-forget the rest so the
     // index keeps growing in the background without adding latency.

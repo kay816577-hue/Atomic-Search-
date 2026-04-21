@@ -253,13 +253,134 @@
     else doSearch(state.q);
   }
 
+  /* ---------------- Instant answers (math, time, units) ----------------
+     Run entirely in the browser — no server call, no external API.
+     If the query maps to a deterministic local answer, we prepend a
+     highlighted card above results so users get the answer immediately
+     (like a calculator or unit-conversion widget). */
+  var UNIT_FACTORS = {
+    // length → meters
+    mm: 0.001, cm: 0.01, m: 1, km: 1000, inch: 0.0254, in: 0.0254,
+    ft: 0.3048, foot: 0.3048, feet: 0.3048, yd: 0.9144, yard: 0.9144,
+    mi: 1609.344, mile: 1609.344, miles: 1609.344,
+    // weight → grams
+    mg: 0.001, g: 1, kg: 1000, lb: 453.592, lbs: 453.592, oz: 28.3495,
+    ton: 1e6, tonne: 1e6,
+    // volume → litres
+    ml: 0.001, l: 1, litre: 1, liter: 1, gal: 3.78541, gallon: 3.78541,
+    cup: 0.2365882, cups: 0.2365882, pt: 0.473176, pint: 0.473176,
+  };
+  var UNIT_CATEGORY = {
+    mm: "length", cm: "length", m: "length", km: "length", inch: "length",
+    in: "length", ft: "length", foot: "length", feet: "length", yd: "length",
+    yard: "length", mi: "length", mile: "length", miles: "length",
+    mg: "weight", g: "weight", kg: "weight", lb: "weight", lbs: "weight",
+    oz: "weight", ton: "weight", tonne: "weight",
+    ml: "volume", l: "volume", litre: "volume", liter: "volume",
+    gal: "volume", gallon: "volume", cup: "volume", cups: "volume",
+    pt: "volume", pint: "volume",
+  };
+
+  function tryMath(q) {
+    // Only evaluate if the string is clearly a math expression (digits,
+    // operators, parens, dots, spaces). No variables, no function calls.
+    var s = (q || "").replace(/\s+/g, "").replace(/×/g, "*").replace(/÷/g, "/");
+    if (!s) return null;
+    if (!/^[-+*/().\d%^]+$/.test(s.replace(/\*\*/g, ""))) return null;
+    if (!/[+\-*/^%]/.test(s)) return null; // require at least one operator
+    if (s.length > 80) return null;
+    try {
+      var expr = s.replace(/\^/g, "**");
+      // eslint-disable-next-line no-new-func
+      var val = Function('"use strict";return (' + expr + ")")();
+      if (typeof val !== "number" || !isFinite(val)) return null;
+      var rounded = Math.round(val * 1e10) / 1e10;
+      return { kind: "math", text: q + " = " + rounded };
+    } catch (e) { return null; }
+  }
+
+  function tryPercent(q) {
+    var m = (q || "").match(/^(-?[\d.]+)\s*%\s*of\s*(-?[\d.]+)$/i);
+    if (!m) return null;
+    var pct = parseFloat(m[1]);
+    var of = parseFloat(m[2]);
+    if (!isFinite(pct) || !isFinite(of)) return null;
+    var v = (pct / 100) * of;
+    return { kind: "percent", text: pct + "% of " + of + " = " + (Math.round(v * 1e6) / 1e6) };
+  }
+
+  function tryUnitConvert(q) {
+    var m = (q || "").trim().toLowerCase().match(/^(-?[\d.]+)\s*([a-z]+)\s*(?:to|in|->)\s*([a-z]+)$/i);
+    if (!m) return null;
+    var val = parseFloat(m[1]);
+    var from = m[2]; var to = m[3];
+    if (!isFinite(val)) return null;
+    if (!(from in UNIT_FACTORS) || !(to in UNIT_FACTORS)) return null;
+    if (UNIT_CATEGORY[from] !== UNIT_CATEGORY[to]) return null;
+    var base = val * UNIT_FACTORS[from];
+    var out = base / UNIT_FACTORS[to];
+    var rounded = Math.round(out * 1e6) / 1e6;
+    return { kind: "unit", text: val + " " + from + " = " + rounded + " " + to };
+  }
+
+  function tryTimeDate(q) {
+    var s = (q || "").trim().toLowerCase();
+    if (s === "time" || s === "current time" || s === "time now" || s === "what time is it") {
+      return { kind: "time", text: "Local time: " + new Date().toLocaleTimeString() };
+    }
+    if (s === "date" || s === "today" || s === "what day is it" || s === "current date") {
+      return { kind: "time", text: "Today: " + new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }) };
+    }
+    if (s === "now" || s === "datetime") {
+      return { kind: "time", text: "Now: " + new Date().toLocaleString() };
+    }
+    return null;
+  }
+
+  function instantAnswer(q) {
+    if (!q) return null;
+    return tryMath(q) || tryPercent(q) || tryUnitConvert(q) || tryTimeDate(q);
+  }
+
+  function renderInstantCard(ans) {
+    if (!ans) return "";
+    return (
+      '<article class="result instant-card" data-kind="' + esc(ans.kind) + '">' +
+      '  <div class="host-line"><span class="badge atomic">Instant</span><span class="host">Calculated locally</span></div>' +
+      '  <div class="instant-text">' + esc(ans.text) + "</div>" +
+      "</article>"
+    );
+  }
+
+  /* ---------------- Search history (localStorage) ---------------- */
+  var HIST_KEY = "atomic.history";
+  function pushHistory(q) {
+    if (!q) return;
+    try {
+      var list = JSON.parse(localStorage.getItem(HIST_KEY) || "[]");
+      list = list.filter(function (x) { return x !== q; });
+      list.unshift(q);
+      list = list.slice(0, 20);
+      localStorage.setItem(HIST_KEY, JSON.stringify(list));
+    } catch (e) { /* ignore */ }
+  }
+  function getHistory() {
+    try { return JSON.parse(localStorage.getItem(HIST_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function clearHistory() {
+    try { localStorage.removeItem(HIST_KEY); } catch (e) { /* ignore */ }
+  }
+
   async function doSearch(q) {
+    pushHistory(q);
     state.q = q;
     $("search-meta").hidden = false;
     $("search-meta").innerHTML = '<span><span class="loading"></span>Searching our index…</span>';
     $("empty").hidden = true;
     $("results").innerHTML = "";
     $("pager").hidden = true;
+    var instant = instantAnswer(q);
+    if (instant) $("results").innerHTML = renderInstantCard(instant);
 
     var u = "/api/search?q=" + encodeURIComponent(q) + "&page=" + state.page + "&per_page=" + settings.perPage;
     var t0 = performance.now();
@@ -287,7 +408,14 @@
       "<span>" + ownCount + " from Atomic index</span>";
 
     $("results").hidden = false;
-    $("results").innerHTML = results.map(renderResult).join("");
+    var instantHtml = instant ? renderInstantCard(instant) : "";
+    var dymHtml = renderDidYouMean(data.didYouMean);
+    var highlightTerms = buildHighlightTerms(q);
+    var html = instantHtml + dymHtml + results.map(function (r, i) {
+      return renderResult(r, i, highlightTerms);
+    }).join("");
+    html += renderRelated(data.related);
+    $("results").innerHTML = html;
     renderPager(data);
 
     // Lazy-fetch safety verdicts in batches of 10.
@@ -300,13 +428,53 @@
     setTimeout(refreshIndexChip, 7000);
   }
 
-  function renderResult(r, i) {
+  // Build the set of terms we should visually highlight in result titles
+  // and snippets (Google-style bold / underline). We drop stopwords and
+  // tiny tokens so we don't highlight every "the" and "of".
+  var HL_STOPWORDS = { "the":1,"a":1,"an":1,"of":1,"is":1,"are":1,"to":1,"in":1,"on":1,"for":1,"and":1,"or":1,"it":1,"be":1,"was":1,"were":1,"by":1,"at":1,"as":1,"this":1,"that":1,"with":1,"from":1,"what":1,"who":1,"why":1,"how":1,"do":1,"does":1,"did":1 };
+  function buildHighlightTerms(q) {
+    if (!q) return [];
+    var out = [];
+    var seen = Object.create(null);
+    var toks = String(q).toLowerCase()
+      .replace(/\bsite:[\w.-]+/g, " ")
+      .split(/[^a-z0-9]+/)
+      .filter(function (t) { return t && t.length >= 2 && !HL_STOPWORDS[t]; });
+    for (var i = 0; i < toks.length; i++) {
+      if (!seen[toks[i]]) { seen[toks[i]] = 1; out.push(toks[i]); }
+    }
+    // Longest terms first so "javascript" wins over "java" when both match.
+    out.sort(function (a, b) { return b.length - a.length; });
+    return out;
+  }
+  function highlight(text, terms) {
+    if (!text) return "";
+    var escaped = esc(text);
+    if (!terms || !terms.length) return escaped;
+    // Build one alternation regex, case-insensitive, so we make a single
+    // pass over the string. Escape regex metacharacters in each term.
+    var pattern = terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|");
+    try {
+      var re = new RegExp("(" + pattern + ")", "gi");
+      return escaped.replace(re, "<mark>$1</mark>");
+    } catch (e) {
+      return escaped;
+    }
+  }
+
+  function renderResult(r, i, terms) {
     var host = r.host || hostOf(r.url);
     var pathLabel = pathOf(r.url);
     var fav = faviconUrl(host);
-    var badge = r.ownIndex
-      ? '<span class="badge atomic" title="Matched in the Atomic index">Atomic</span>'
-      : "";
+    var badges = [];
+    if (r.ownIndex) badges.push('<span class="badge atomic" title="Matched in the Atomic index">Atomic</span>');
+    if (r.agreement && r.agreement >= 2) {
+      badges.push('<span class="badge agree" title="Confirmed by ' + r.agreement + ' sources">' + r.agreement + ' sources</span>');
+    }
+    var titleHtml = highlight(r.title || r.url, terms);
+    var snippetHtml = r.snippet ? highlight(r.snippet, terms) : "";
     return (
       '<article class="result" data-url="' + esc(r.url) + '">' +
       '  <div class="host-line">' +
@@ -315,12 +483,35 @@
       '      <span class="host">' + esc(host) + "</span>" +
       '      <span class="host-url" title="' + esc(r.url) + '">' + esc(pathLabel) + "</span>" +
       "    </div>" +
-      "    " + badge +
+      "    " + badges.join("") +
+      '    <button class="result-copy icon-btn" type="button" title="Copy URL" aria-label="Copy URL" data-copy="' + esc(r.url) + '">' +
+      '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
+      '    </button>' +
       '    <span class="safety-dot" data-verdict="pending" title="Scanning for safety…"></span>' +
       "  </div>" +
-      '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + esc(r.title || r.url) + "</a>" +
-      (r.snippet ? '<p class="snippet">' + esc(r.snippet) + "</p>" : "") +
+      '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + titleHtml + "</a>" +
+      (snippetHtml ? '<p class="snippet">' + snippetHtml + "</p>" : "") +
       "</article>"
+    );
+  }
+
+  function renderDidYouMean(dym) {
+    if (!dym || !dym.suggested) return "";
+    return (
+      '<p class="did-you-mean">Did you mean ' +
+      '<a href="#" data-dym="' + esc(dym.suggested) + '">' + esc(dym.suggested) + "</a>?" +
+      "</p>"
+    );
+  }
+
+  function renderRelated(list) {
+    if (!list || !list.length) return "";
+    var pills = list.map(function (q) {
+      return '<a class="related-pill" href="#" data-related="' + esc(q) + '">' + esc(q) + "</a>";
+    }).join("");
+    return (
+      '<aside class="related-searches" aria-label="Related searches">' +
+      '<span class="related-searches-label">Related</span>' + pills + "</aside>"
     );
   }
 
@@ -591,6 +782,27 @@
     $("form").addEventListener("submit", function (e) {
       e.preventDefault();
       submitQuery($("q").value);
+    });
+
+    // Delegated handlers for related-search pills and "did you mean"
+    // suggestions. Anchors live inside #results, so one handler covers
+    // every re-render.
+    document.addEventListener("click", function (ev) {
+      var rel = ev.target.closest && ev.target.closest("[data-related]");
+      var dym = ev.target.closest && ev.target.closest("[data-dym]");
+      if (rel) {
+        ev.preventDefault();
+        var q1 = rel.getAttribute("data-related") || "";
+        $("q").value = q1;
+        submitQuery(q1);
+        return;
+      }
+      if (dym) {
+        ev.preventDefault();
+        var q2 = dym.getAttribute("data-dym") || "";
+        $("q").value = q2;
+        submitQuery(q2);
+      }
     });
 
     // Stats on home + floating index chip.

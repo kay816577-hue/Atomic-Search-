@@ -362,6 +362,141 @@
   --shadow-soft: 0 0 20px rgba(255, 42, 109, 0.22);
 }
 
+/* ---------- Extra futuristic + mood themes ---------- */
+
+[data-theme="synthwave"] {
+  --bg: #1a0933; --bg-elev: #240a47; --bg-elev-1: #2e0f5a; --bg-elev-2: #3a136b;
+  --text: #fef9ff; --text-dim: #ffb8ff; --text-mute: #a98dd7;
+  --accent: #ff71ce; --accent-2: #01cdfe;
+  --border: #3a136b; --border-soft: #2e0f5a;
+  --danger: #ff3864; --warn: #fffb96; --ok: #05ffa1;
+  --link: #01cdfe; --link-visited: #ff71ce;
+  --ring: rgba(255, 113, 206, 0.5);
+  --shadow: 0 0 60px rgba(255, 113, 206, 0.2), 0 0 120px rgba(1, 205, 254, 0.12);
+  --shadow-soft: 0 0 20px rgba(255, 113, 206, 0.2);
+}
+
+[data-theme="vaporwave"] {
+  --bg: #0f0524; --bg-elev: #1a0d3b; --bg-elev-1: #231354; --bg-elev-2: #2d1a6b;
+  --text: #f5e1ff; --text-dim: #c9a8f0; --text-mute: #8b6dc6;
+  --accent: #ff6ec7; --accent-2: #72d5ff;
+  --border: #2d1a6b; --border-soft: #231354;
+  --danger: #ff5a87; --warn: #ffd3ad; --ok: #81ffd6;
+  --link: #72d5ff; --link-visited: #ff6ec7;
+  --ring: rgba(255, 110, 199, 0.45);
+  --shadow: 0 0 40px rgba(114, 213, 255, 0.18);
+  --shadow-soft: 0 0 18px rgba(255, 110, 199, 0.22);
+}
+
+[data-theme="aurora"] {
+  --bg: #06121e; --bg-elev: #0a1a2c; --bg-elev-1: #0f2538; --bg-elev-2: #142f48;
+  --text: #e4f4ff; --text-dim: #8cc3d9; --text-mute: #5a86a0;
+  --accent: #55ffc1; --accent-2: #7aa7ff;
+  --border: #19354e; --border-soft: #0f2538;
+  --danger: #ff5c7f; --warn: #ffd479; --ok: #55ffc1;
+  --link: #a0f0ff; --link-visited: #c79dff;
+  --ring: rgba(85, 255, 193, 0.4);
+  --shadow: 0 0 80px rgba(85, 255, 193, 0.12), 0 0 140px rgba(122, 167, 255, 0.1);
+  --shadow-soft: 0 0 16px rgba(85, 255, 193, 0.15);
+}
+
+[data-theme="blood-moon"] {
+  --bg: #120405; --bg-elev: #1d0708; --bg-elev-1: #2a0a0c; --bg-elev-2: #3a0e12;
+  --text: #ffe8e8; --text-dim: #d49a9a; --text-mute: #8c6060;
+  --accent: #ff2e2e; --accent-2: #ff8a3c;
+  --border: #4a1014; --border-soft: #340c10;
+  --danger: #ff2e2e; --warn: #ff8a3c; --ok: #ffcf3c;
+  --link: #ff8a8a; --link-visited: #ff6a38;
+  --ring: rgba(255, 46, 46, 0.45);
+  --shadow: 0 0 60px rgba(255, 46, 46, 0.18);
+  --shadow-soft: 0 0 18px rgba(255, 46, 46, 0.22);
+}
+
+[data-theme="forest"] {
+  --bg: #0b1410; --bg-elev: #11201a; --bg-elev-1: #162b22; --bg-elev-2: #1c382c;
+  --text: #e4f4e8; --text-dim: #9bc2a7; --text-mute: #65896f;
+  --accent: #67e08a; --accent-2: #c7b67a;
+  --border: #223a2d; --border-soft: #192d23;
+  --danger: #f06565; --warn: #e8b85a; --ok: #67e08a;
+  --link: #8fefad; --link-visited: #c7b67a;
+  --ring: rgba(103, 224, 138, 0.35);
+  --shadow: 0 6px 32px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="deep-sea"] {
+  --bg: #04121f; --bg-elev: #08192a; --bg-elev-1: #0c2239; --bg-elev-2: #112c4a;
+  --text: #e1f2ff; --text-dim: #8fb8d6; --text-mute: #557b99;
+  --accent: #3fc1ff; --accent-2: #75f4d5;
+  --border: #143654; --border-soft: #0c2239;
+  --danger: #ff6b6b; --warn: #ffcf5a; --ok: #75f4d5;
+  --link: #8ed9ff; --link-visited: #a1e8d5;
+  --ring: rgba(63, 193, 255, 0.4);
+  --shadow: 0 10px 50px rgba(0, 20, 50, 0.6);
+  --shadow-soft: 0 2px 16px rgba(0, 20, 50, 0.4);
+}
+
+[data-theme="pastel"] {
+  --bg: #fef6fb; --bg-elev: #fbeef5; --bg-elev-1: #f6e6ef; --bg-elev-2: #efdbe8;
+  --text: #3a2540; --text-dim: #6b516f; --text-mute: #8e7890;
+  --accent: #ff8fb8; --accent-2: #8fd8ff;
+  --border: #e9cbdd; --border-soft: #f3ddea;
+  --danger: #e86b8a; --warn: #e8b966; --ok: #78c69a;
+  --link: #b85a82; --link-visited: #7a4b92;
+  --ring: rgba(255, 143, 184, 0.32);
+  --shadow: 0 6px 30px rgba(200, 100, 150, 0.12);
+  --shadow-soft: 0 2px 10px rgba(200, 100, 150, 0.08);
+}
+
+[data-theme="terminal-amber"] {
+  --bg: #0a0703; --bg-elev: #120d05; --bg-elev-1: #1a1108; --bg-elev-2: #23170a;
+  --text: #ffb347; --text-dim: #c98a2b; --text-mute: #7a5418;
+  --accent: #ffcf4d; --accent-2: #ff8c1a;
+  --border: #3a2408; --border-soft: #23170a;
+  --danger: #ff5a2a; --warn: #ffcf4d; --ok: #ffb347;
+  --link: #ffd77a; --link-visited: #c98a2b;
+  --ring: rgba(255, 179, 71, 0.4);
+  --shadow: 0 0 40px rgba(255, 179, 71, 0.14);
+  --shadow-soft: 0 0 14px rgba(255, 179, 71, 0.18);
+}
+
+[data-theme="obsidian"] {
+  --bg: #05060a; --bg-elev: #0a0c14; --bg-elev-1: #0f121d; --bg-elev-2: #161a28;
+  --text: #f0f3fa; --text-dim: #9ca7bf; --text-mute: #60697d;
+  --accent: #a78bfa; --accent-2: #34d399;
+  --border: #1f2433; --border-soft: #141824;
+  --danger: #f87171; --warn: #fbbf24; --ok: #34d399;
+  --link: #c4b5fd; --link-visited: #f472b6;
+  --ring: rgba(167, 139, 250, 0.45);
+  --shadow: 0 12px 50px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* Animated colour wash for synthwave + vaporwave + aurora — adds depth
+   without committing to a full video background. */
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="synthwave"],
+  body[data-theme="vaporwave"] {
+    background-image:
+      radial-gradient(1200px 600px at 20% 10%, rgba(255, 113, 206, 0.12), transparent 60%),
+      radial-gradient(1000px 500px at 80% 90%, rgba(1, 205, 254, 0.10), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 18s ease-in-out infinite alternate;
+  }
+  body[data-theme="aurora"] {
+    background-image:
+      radial-gradient(900px 500px at 15% 20%, rgba(85, 255, 193, 0.12), transparent 60%),
+      radial-gradient(1100px 600px at 85% 80%, rgba(122, 167, 255, 0.14), transparent 60%),
+      radial-gradient(700px 400px at 50% 50%, rgba(199, 157, 255, 0.08), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 22s ease-in-out infinite alternate;
+  }
+}
+@keyframes atomic-wash {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(25deg); }
+}
+
 /* Quantum-specific flourish: animated grid background behind the home view
    and results shell so the futuristic theme doesn't just look like a
    recolour. Pure CSS, GPU-cheap, respects prefers-reduced-motion. */

@@ -19,6 +19,8 @@ import { isNsfwResult, isNsfwText } from "./nsfw.js";
 const ENGINES = [
   "startpage",
   "wikipedia",
+  "hackernews",
+  "reddit",
 ];
 
 // With a smaller engine set we fan out more pages per engine so result
@@ -36,9 +38,15 @@ const SEARXNG_POOL = [
   "https://search.sapti.me",
 ];
 
+// Reciprocal Rank Fusion with a cross-source agreement boost. When the
+// exact same URL shows up in N different engines, that's a very strong
+// signal — we multiply the RRF score so cross-confirmed pages float to
+// the top. Also tracks which engines voted for each URL so the UI can
+// show "X sources agree".
 function rankBlend(lists) {
   const k = 60;
   const scores = new Map();
+  const sources = new Map(); // url -> Set<engine>
   const items = new Map();
   for (const list of lists) {
     list.forEach((item, idx) => {
@@ -46,13 +54,26 @@ function rankBlend(lists) {
       if (!key) return;
       const prev = scores.get(key) || 0;
       scores.set(key, prev + 1 / (k + idx + 1));
+      const set = sources.get(key) || new Set();
+      if (item.engine) set.add(item.engine);
+      sources.set(key, set);
       if (!items.has(key)) items.set(key, { ...item, url: key });
     });
   }
-  const merged = [...items.values()].map((it) => ({
-    ...it,
-    score: scores.get(it.url) || 0,
-  }));
+  const merged = [...items.values()].map((it) => {
+    const baseline = scores.get(it.url) || 0;
+    const srcs = sources.get(it.url) || new Set();
+    // 1 source: x1.0 (no boost), 2: x1.4, 3: x1.7, 4+: x1.9 — capped so
+    // one widely-shared link can't bury a very strong but single-source hit.
+    const agree = srcs.size;
+    const boost = agree <= 1 ? 1 : Math.min(1.9, 1 + Math.log2(agree) * 0.6);
+    return {
+      ...it,
+      score: baseline * boost,
+      engines: Array.from(srcs),
+      agreement: agree,
+    };
+  });
   merged.sort((a, b) => b.score - a.score);
   return merged;
 }
@@ -319,7 +340,78 @@ async function marginalia(q, page = 1) {
   }
 }
 
-const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia };
+// Hacker News — Algolia-powered public JSON API, no key needed. Broad
+// tech/news/discussion coverage that Startpage often misses.
+async function hackernews(q, page = 1) {
+  if (page > 1) return []; // one page is enough — we only keep top 15 anyway
+  try {
+    const res = await privateFetch(
+      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=15`,
+      { headers: { Accept: "application/json" }, timeout: 6000 }
+    );
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    if (!data || !Array.isArray(data.hits)) return [];
+    const out = [];
+    for (const h of data.hits) {
+      const url = h.url || (h.objectID ? `https://news.ycombinator.com/item?id=${h.objectID}` : null);
+      const title = (h.title || "").trim();
+      if (!url || !title) continue;
+      out.push({
+        url,
+        title,
+        snippet: (h.story_text || "").replace(/<[^>]+>/g, "").slice(0, 280) || `Hacker News \u00b7 ${h.points || 0} points \u00b7 ${h.num_comments || 0} comments`,
+        engine: "hackernews",
+      });
+      if (out.length >= 15) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// Reddit — public JSON search API, no key needed. Great for real-user
+// opinions and niche questions. We ask for relevance and limit to 15.
+async function reddit(q, page = 1) {
+  if (page > 1) return [];
+  try {
+    const res = await privateFetch(
+      `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=relevance&limit=15&t=all&raw_json=1`,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "atomic-search/1.0 (private metasearch)",
+        },
+        timeout: 6000,
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const children = data?.data?.children;
+    if (!Array.isArray(children)) return [];
+    const out = [];
+    for (const c of children) {
+      const d = c?.data;
+      if (!d) continue;
+      const permalink = d.permalink ? `https://www.reddit.com${d.permalink}` : null;
+      const title = (d.title || "").trim();
+      if (!permalink || !title) continue;
+      out.push({
+        url: permalink,
+        title,
+        snippet: (d.selftext || "").slice(0, 280) || `r/${d.subreddit || "reddit"} \u00b7 ${d.score || 0} upvotes \u00b7 ${d.num_comments || 0} comments`,
+        engine: "reddit",
+      });
+      if (out.length >= 15) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia, hackernews, reddit };
 
 // ---------- Self-healing engine tracker ----------
 // Every engine has an independent failure budget. Three consecutive failures
