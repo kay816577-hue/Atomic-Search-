@@ -156,11 +156,10 @@
      without a mouse. */
   var ACTIONS = [
     { label: "Search the web",              hint: "run a query", run: function (q) { submitQuery(q || "atomic search"); } },
-    { label: "Open settings",                hint: "theme, safety, AI…", run: function () { clickById("open-settings") || clickById("open-settings-home"); } },
+    { label: "Open settings",                hint: "theme, safety, privacy…", run: function () { clickById("open-settings") || clickById("open-settings-home"); } },
     { label: "Submit a URL to index",        hint: "grow the Atomic index", run: function () { clickById("open-submit-home"); } },
     { label: "Open scan tab",                hint: "VirusTotal URL/file scan", run: function () { activateTab("scan"); } },
     { label: "Go home",                      hint: "clear results", run: function () { location.href = "/"; } },
-    { label: "Sign in / account",            hint: "optional login", run: function () { clickById("open-auth") || clickById("open-auth-home"); } },
     { label: "Clear search history",         hint: "forget every query on this device", run: function () { clearHistory(); } },
     { label: "Show keyboard shortcuts",      hint: "", run: openCheatsheet },
     { label: "Theme: Quantum",               hint: "switch theme", run: function () { setTheme("quantum"); } },

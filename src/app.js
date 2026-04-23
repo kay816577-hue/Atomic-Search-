@@ -19,7 +19,6 @@ import {
   clearIndex,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
-import { buildAuthRoutes, currentUser } from "./auth.js";
 import { scanDownload, scanBuffer } from "./scan.js";
 import { crawlOne } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
@@ -33,10 +32,17 @@ function privacyHeaders() {
   return {
     "Referrer-Policy": "no-referrer",
     "X-Robots-Tag": "noindex, nofollow",
-    // interest-cohort/browsing-topics opts out of Chrome's FLoC/Topics API
-    // so even the browser can't attach a tracker profile to our pages.
+    // Disable every browser side-channel we can: FLoC, Topics, sensors,
+    // autoplay, XR, payment, serial/USB/HID/MIDI, sync-xhr. Anything the
+    // UI doesn't need is explicitly off.
     "Permissions-Policy":
-      "interest-cohort=(), browsing-topics=(), geolocation=(), camera=(), microphone=(), payment=()",
+      "interest-cohort=(), browsing-topics=(), attribution-reporting=(), " +
+      "geolocation=(), camera=(), microphone=(), payment=(), " +
+      "accelerometer=(), gyroscope=(), magnetometer=(), ambient-light-sensor=(), " +
+      "usb=(), serial=(), hid=(), midi=(), bluetooth=(), " +
+      "xr-spatial-tracking=(), autoplay=(), fullscreen=(self), picture-in-picture=(), " +
+      "sync-xhr=(), display-capture=(), encrypted-media=(), screen-wake-lock=(), " +
+      "clipboard-read=(), clipboard-write=(self), publickey-credentials-get=()",
     "Cache-Control": "no-store",
   };
 }
@@ -400,7 +406,16 @@ export function buildApp() {
   app.use("*", async (c, next) => {
     await next();
     for (const [k, v] of Object.entries(privacyHeaders())) c.res.headers.set(k, v);
-    for (const [k, v] of Object.entries(securityHeaders())) c.res.headers.set(k, v);
+    // /proxy responses are consumed inside the same-origin Safe-view iframe,
+    // so we must NOT hand them DENY/frame-ancestors 'none'. The proxy
+    // handler itself already strips upstream cookies + CSP + HSTS.
+    if (!new URL(c.req.url).pathname.startsWith("/proxy")) {
+      for (const [k, v] of Object.entries(securityHeaders())) c.res.headers.set(k, v);
+    } else {
+      c.res.headers.set("X-Frame-Options", "SAMEORIGIN");
+      c.res.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
+      c.res.headers.set("Referrer-Policy", "no-referrer");
+    }
   });
 
   app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
@@ -672,6 +687,10 @@ export function buildApp() {
   // deployment. Shares the same per-IP rate limit (60 rpm) as the UI.
   // Intentionally just forwards to the existing handlers via app.fetch
   // so behaviour stays in lockstep.
+  // Kept ASCII-only: HTTP header values are ByteString, so any char > 0xFF
+  // (e.g. em-dash U+2014) makes Headers.set throw with a ByteString error.
+  const ATTRIBUTION_TEXT =
+    "Powered by Atomic Search - https://github.com/kay816577-hue/Atomic-Search-";
   const v1Forward = (inner) => async (c) => {
     const url = new URL(c.req.url);
     url.pathname = inner;
@@ -683,6 +702,30 @@ export function buildApp() {
     // Ensure CORS-open for v1 regardless of caller origin.
     res.headers.set("Access-Control-Allow-Origin", "*");
     res.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    // Attribution — consumers are expected to credit Atomic Search. The
+    // header is informational; the `attribution` JSON field is where
+    // UI-rendering consumers should pull the credit text from.
+    res.headers.set("X-Powered-By", "Atomic Search");
+    res.headers.set("X-Atomic-Attribution", ATTRIBUTION_TEXT);
+    // Splice the attribution field into JSON bodies only. Anything else
+    // (health pings, plain-text errors) passes through unchanged.
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("application/json")) {
+      try {
+        const body = await res.clone().json();
+        if (body && typeof body === "object" && !Array.isArray(body)) {
+          body.attribution = ATTRIBUTION_TEXT;
+          const merged = new Response(JSON.stringify(body), {
+            status: res.status,
+            headers: res.headers,
+          });
+          merged.headers.set("content-type", "application/json; charset=utf-8");
+          return merged;
+        }
+      } catch {
+        // Body wasn't JSON after all — fall through to the original res.
+      }
+    }
     return res;
   };
   app.get("/api/v1/search", v1Forward("/api/search"));
@@ -877,8 +920,13 @@ ${verdict === "pending" ? `<script>
     return proxyHandler(url);
   });
 
-  // Auth routes (Google OAuth + email magic link). No-op if not configured.
-  app.route("/", buildAuthRoutes());
+  // Auth / sign-in was removed in the v2 redesign. Atomic is now strictly
+  // anonymous — no accounts, no cookies, no per-user state on the server.
+  // Any legacy `/api/auth/*` request just 410s so old links don't silently
+  // succeed with stale cookies.
+  app.all("/api/auth/*", (c) =>
+    c.json({ ok: false, error: "Sign-in has been removed. Atomic is fully anonymous." }, 410)
+  );
 
   // Safety scanner — public, no login required. The Scan tab uses these
   // endpoints to let anyone check a URL or upload a file against VirusTotal

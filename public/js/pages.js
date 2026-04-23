@@ -15,8 +15,9 @@
     about: {
       title: "About Atomic Search",
       body:
+        '<p><strong>Atomic is in beta.</strong> Core features are stable and in daily use, but new functionality lands often — expect the occasional rough edge. Bug reports and PRs are very welcome on <a href="https://github.com/kay816577-hue/Atomic-Search-/issues" target="_blank" rel="noopener">GitHub</a>.</p>' +
         '<p>Atomic is a privacy-first meta-search engine with its own growing anonymous index. ' +
-        'One search box, clean UI, zero tracking — and no Postgres, no cloud storage, no per-user data.</p>' +
+        'One search box, clean UI, zero tracking — and no accounts, no cookies, no per-user data.</p>' +
         '<h3>What makes it different</h3>' +
         '<ul>' +
         '<li><strong>Seven engines, one request.</strong> Startpage, Brave, Bing, DuckDuckGo, Wikipedia, Hacker News, and Reddit are all queried in parallel and their results rank-fused.</li>' +
@@ -25,7 +26,9 @@
         '<li><strong>Zero-config public API.</strong> Anyone can hit <code>/api/v1/search</code> from anywhere, no key required.</li>' +
         '</ul>' +
         '<h3>Open source</h3>' +
-        '<p>MIT-licensed. <a href="https://github.com/kay816577-hue/Atomic-Search-" target="_blank" rel="noopener">Source on GitHub</a>.</p>',
+        '<p>MIT-licensed. <a href="https://github.com/kay816577-hue/Atomic-Search-" target="_blank" rel="noopener">Source on GitHub</a>.</p>' +
+        '<h3>Who builds it</h3>' +
+        '<p>Atomic Search is a <strong>UCX Industry</strong> project, founded in 2023 by <strong>Kayan Erkama</strong>. Contributions welcome via pull request.</p>',
     },
 
     "self-hosting": {
@@ -58,7 +61,7 @@
         '<h3>Cloudflare Pages</h3>' +
         '<p>Workers don\'t support better-sqlite3 yet, so the Atomic index runs in LRU-cache fallback mode. Meta-search + anonymous proxy work fine; for a persistent own-index on Cloudflare, use the Render or Docker flavour.</p>' +
         '<h3>Full env reference</h3>' +
-        '<p>See the <a href="https://github.com/kay816577-hue/Atomic-Search-#self-hosting" target="_blank" rel="noopener">README</a> for the full list (VirusTotal, OAuth, SMTP, AI backends — all optional).</p>',
+        '<p>See the <a href="https://github.com/kay816577-hue/Atomic-Search-#self-hosting" target="_blank" rel="noopener">README</a> for the full list (VirusTotal — optional).</p>',
     },
 
     api: {
@@ -93,7 +96,7 @@
         '<h3>4. No scraping Atomic itself</h3>' +
         '<p>The public API is rate-limited to 60 req/min per IP. Persistent abuse may result in your request being dropped (we don\'t store IPs; we hash them in memory).</p>' +
         '<h3>5. Self-hosted deployments</h3>' +
-        '<p>Operators of a fork are responsible for their own local law compliance and, if they enable sign-in, for informing their users about data retention.</p>' +
+        '<p>Operators of a fork are responsible for their own local law compliance.</p>' +
         '<h3>6. License</h3>' +
         '<p>Source is MIT. See <code>LICENSE</code> in the repo.</p>',
     },
@@ -107,7 +110,7 @@
         '<li><strong>Search queries.</strong> No query log, no SQL table of searches, no file with queries in it.</li>' +
         '<li><strong>IP addresses.</strong> We do not persist your IP. The rate-limiter keeps an in-memory token bucket keyed on a 32-bit FNV hash of your IP and evicts it on idle.</li>' +
         '<li><strong>User-Agent or Referer</strong> from incoming requests.</li>' +
-        '<li><strong>Analytics cookies.</strong> Atomic sets zero cookies unless you sign in — and then only a signed, HTTP-only, SameSite=Lax session cookie containing a numeric user id + expiry.</li>' +
+        '<li><strong>Cookies.</strong> Atomic sets <strong>zero cookies</strong>, ever. There is no sign-in, no session, no tracking cookie of any kind.</li>' +
         '<li><strong>Third-party trackers.</strong> The frontend loads only same-origin assets. CSP blocks everything else.</li>' +
         '</ul>' +
         '<h3>What Atomic DOES store</h3>' +

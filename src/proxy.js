@@ -6,6 +6,8 @@ import { privateFetch } from "./util.js";
 import { isSafeUrl } from "./safeurl.js";
 
 const MAX_BYTES = 4 * 1024 * 1024; // 4 MB safety cap
+const PROXY_TIMEOUT_MS = 10000;     // 10 s hard upstream timeout
+const MAX_REDIRECTS = 5;            // redirect-chain cap (handled by fetch+loop)
 
 function absolutise(base, href) {
   try {
@@ -59,26 +61,69 @@ export async function proxyHandler(targetUrl) {
   if (!targetUrl || !isSafeUrl(targetUrl)) {
     return new Response("Invalid proxy target", { status: 400 });
   }
+  // Extra scheme blocklist — isSafeUrl already forces http(s) but belt-and-
+  // braces in case the caller hand-built a URL object.
+  if (/^(file|gopher|ftp|dict|ldap|tftp|jar|chrome|view-source|javascript|data|blob):/i.test(targetUrl)) {
+    return new Response("Scheme not allowed", { status: 400 });
+  }
+  // Manual redirect handling so we can enforce a hop cap AND re-run
+  // isSafeUrl on every Location target (stops open-redirect SSRF).
+  let current = targetUrl;
   let res;
-  try {
-    res = await privateFetch(targetUrl, {
-      timeout: 12000,
-      headers: { "Accept-Encoding": "identity" },
-    });
-  } catch (e) {
-    return new Response("Upstream fetch failed: " + (e?.message || e), {
-      status: 502,
-    });
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (!isSafeUrl(current)) {
+      return new Response("Redirect target not allowed", { status: 400 });
+    }
+    try {
+      res = await privateFetch(current, {
+        timeout: PROXY_TIMEOUT_MS,
+        redirect: "manual",
+        headers: { "Accept-Encoding": "identity" },
+      });
+    } catch (e) {
+      return new Response("Upstream fetch failed: " + (e?.message || e), {
+        status: 502,
+      });
+    }
+    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+      if (hop === MAX_REDIRECTS) {
+        return new Response("Too many redirects", { status: 508 });
+      }
+      try {
+        current = new URL(res.headers.get("location"), current).toString();
+        continue;
+      } catch {
+        return new Response("Bad redirect target", { status: 502 });
+      }
+    }
+    break;
   }
 
-  // Strip upstream cookies — user stays fully anonymous.
+  // Strip upstream cookies + any header that could leak/coerce identity —
+  // user stays fully anonymous and the rewritten page can't re-embed itself.
+  const STRIPPED_RESP = new Set([
+    "set-cookie",
+    "set-cookie2",
+    "clear-site-data",
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "strict-transport-security",
+    "x-frame-options",
+    "x-ua-compatible",
+    "content-length",
+    "content-encoding",
+    "alt-svc",
+    "accept-ch",
+    "critical-ch",
+    "permissions-policy",
+    "feature-policy",
+    "report-to",
+    "nel",
+    "reporting-endpoints",
+  ]);
   const headers = new Headers();
   res.headers.forEach((v, k) => {
-    const lk = k.toLowerCase();
-    if (lk === "set-cookie" || lk === "content-security-policy" || lk === "strict-transport-security" ||
-        lk === "x-frame-options" || lk === "content-length" || lk === "content-encoding") {
-      return;
-    }
+    if (STRIPPED_RESP.has(k.toLowerCase())) return;
     headers.set(k, v);
   });
   headers.set("Referrer-Policy", "no-referrer");

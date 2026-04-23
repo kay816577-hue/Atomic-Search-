@@ -8,7 +8,7 @@
 // Env vars (all optional — the module no-ops if required ones are missing):
 //   GH_INDEX_PAT       GitHub PAT with contents:write on the repo.
 //   GH_INDEX_REPO      owner/repo (default derived from GITHUB_REPOSITORY or
-//                       GH_REPO, falling back to "kayan4bit/Atomic-Search-").
+//                       GH_REPO, falling back to "kay816577-hue/Atomic-Search-").
 //   GH_INDEX_BRANCH    Branch to push index snapshots to (default
 //                       "atomic-search-index").
 //   DATA_DIR           Where the live SQLite DB lives (default ./data).
@@ -415,7 +415,7 @@ export async function startIndexSync() {
 
     // Expose a manual "push now" hook the admin endpoint can call when the
     // user submits a site or the crawler just indexed a batch of new pages
-    // (so the snapshot reflects reality immediately, not up to 10 minutes
+    // (so the snapshot reflects reality immediately, not up to 2 minutes
     // later).
     manualTrigger = tick;
 

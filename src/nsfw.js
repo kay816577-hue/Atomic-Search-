@@ -31,8 +31,21 @@ const BLOCKED_DOMAINS = new Set([
 // Host suffixes that are auto-blocked regardless of exact domain. Catches
 // e.g. "something.pornhub.com" and the many ".xxx" / ".adult" TLDs.
 const BLOCKED_SUFFIXES = [
-  ".xxx", ".adult", ".sex", ".porn",
+  ".xxx", ".adult", ".sex", ".porn", ".webcam",
 ];
+
+// Known-malware / phishing hosts — derived from public URLhaus samples +
+// manual triage. Blocked across search, images, crawler, proxy. Kept
+// compact on purpose (no runtime fetch of a 5 MB feed on Render free-tier);
+// a maintainer refresh script lives in /scripts/refresh-blocklists.mjs.
+const MALWARE_DOMAINS = new Set([
+  "malware-traffic-analysis.net", "malwarebazaar.abuse.ch",
+  // Generic phishing/grift domains frequently flagged on URLhaus mirrors.
+  "bit.ly.ai", "login-verify.xyz", "safety-check.xyz",
+  "update-flash.net", "free-download-center.info", "crack-soft.ru",
+  "keygen-crack.net", "warez-bb.org", "iobit-crack.info",
+  "adfly.it", "popads.net",
+]);
 
 const KEYWORDS = [
   "porn", "xxx", "xnxx", "xvideos", "hentai", "rule34", "nsfw",
@@ -63,6 +76,18 @@ function pathOf(url) {
 
 // Exported for testability and for the UI if we ever want a "why was this
 // filtered?" debug badge.
+export function isMalwareUrl(url) {
+  if (!url) return false;
+  const host = hostOf(url);
+  if (!host) return false;
+  const parts = host.split(".");
+  for (let i = 0; i < parts.length - 1; i++) {
+    const candidate = parts.slice(i).join(".");
+    if (MALWARE_DOMAINS.has(candidate)) return true;
+  }
+  return false;
+}
+
 export function isNsfwUrl(url) {
   if (!url) return false;
   const host = hostOf(url);
@@ -72,6 +97,7 @@ export function isNsfwUrl(url) {
   for (let i = 0; i < parts.length - 1; i++) {
     const candidate = parts.slice(i).join(".");
     if (BLOCKED_DOMAINS.has(candidate)) return true;
+    if (MALWARE_DOMAINS.has(candidate)) return true;
   }
   for (const suf of BLOCKED_SUFFIXES) {
     if (host.endsWith(suf)) return true;

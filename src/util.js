@@ -52,26 +52,51 @@ export function stripTags(html = "") {
     .trim();
 }
 
+// Broad tracking-param blocklist. Every result URL passes through this
+// before being shown to the user, stored in the own-index, or emitted in
+// the public v1 API — so Atomic never leaks ad/analytics identifiers
+// baked into upstream result links.
+const TRACKING_PARAMS_EXACT = new Set([
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "utm_id", "utm_name", "utm_reader", "utm_viz_id",
+  "fbclid", "gclid", "yclid", "dclid", "msclkid", "twclid", "ttclid", "li_fat_id",
+  "mc_cid", "mc_eid", "igshid", "igsh", "ig_rid",
+  "ref", "ref_src", "ref_url", "referrer", "source", "src",
+  "spm", "scm", "from", "share_source",
+  "_openstat", "yclid", "zanpid", "amp", "_hsmi", "_hsenc",
+  "wt_mc", "WT.mc_id", "WT.tsrc",
+  "email_source", "email_subject", "CampaignID", "campaign",
+  "fb_action_ids", "fb_action_types", "fb_ref", "fb_source",
+  "pk_campaign", "pk_kwd", "pk_source", "pk_medium",
+  "mtm_source", "mtm_medium", "mtm_campaign", "mtm_keyword", "mtm_cid", "mtm_content",
+  "trk", "trkCampaign",
+  "oly_anon_id", "oly_enc_id",
+  "vero_conv", "vero_id",
+  "hsCtaTracking", "__hstc", "__hssc", "__hsfp",
+  "_ga", "_gl", "gbraid", "wbraid",
+  "s_cid", "s_kwcid",
+  "ncid", "cmpid", "CNDID", "icid", "intcmp",
+  "mkt_tok", "mkt_tok_e",
+]);
+const TRACKING_PARAMS_PREFIX = [
+  "utm_", "ga_", "_ga_", "_hs", "hs_", "mc_", "mtm_", "pk_", "WT.", "trk_",
+];
+
 export function normaliseUrl(u) {
   try {
     const url = new URL(u);
     url.hash = "";
-    // strip the most obvious tracking params
-    const junk = [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "fbclid",
-      "gclid",
-      "mc_cid",
-      "mc_eid",
-      "igshid",
-      "ref",
-      "ref_src",
-    ];
-    for (const k of junk) url.searchParams.delete(k);
+    // Strip tracking params — both explicit names and anything starting
+    // with a known prefix (utm_*, mc_*, mtm_*, etc).
+    const toDrop = [];
+    for (const k of url.searchParams.keys()) {
+      if (TRACKING_PARAMS_EXACT.has(k)) { toDrop.push(k); continue; }
+      const lk = k.toLowerCase();
+      if (TRACKING_PARAMS_PREFIX.some((p) => lk.startsWith(p.toLowerCase()))) {
+        toDrop.push(k);
+      }
+    }
+    for (const k of toDrop) url.searchParams.delete(k);
     return url.toString();
   } catch {
     return u;

@@ -21,9 +21,7 @@
   }
   var settings = loadSettings();
 
-  /* ---------------- Auth state (cookie session) ---------------- */
-  var me = null;
-  var authConfig = { google: false, email: false };
+  /* Auth was removed in v2 — Atomic is fully anonymous, no cookies. */
 
   /* ---------------- State ---------------- */
   var state = { q: "", tab: "all", page: 1 };
@@ -511,6 +509,7 @@
       '    <button class="result-copy icon-btn" type="button" title="Copy URL" aria-label="Copy URL" data-copy="' + esc(r.url) + '">' +
       '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
       '    </button>' +
+      '    <button type="button" class="safe-view" title="Open via anonymising proxy in an isolated sandbox" data-safe-view="' + esc(r.url) + '">Safe view</button>' +
       '    <span class="safety-dot" data-verdict="pending" title="Scanning for safety…"></span>' +
       "  </div>" +
       '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + titleHtml + "</a>" +
@@ -664,95 +663,10 @@
     });
   }
 
-  /* ---------------- Auth modal ---------------- */
-  async function refreshAuth() {
-    try {
-      var r = await fetch("/api/auth/me", { credentials: "same-origin" });
-      var j = await r.json();
-      me = j.user || null;
-      authConfig = j.config || { google: false, email: false };
-    } catch (e) { me = null; }
-    applyAuthUI();
-  }
-
-  function applyAuthUI() {
-    $("google-signin-wrap").hidden = !authConfig.google;
-    $("magic-form").hidden = !authConfig.email;
-    var signedOut = !me;
-    $("auth-signed-out").hidden = !signedOut;
-    $("auth-signed-in").hidden = signedOut;
-    if (me) {
-      $("auth-who").textContent = me.email || me.name || "you";
-    }
-    if (!authConfig.google && !authConfig.email && !me) {
-      $("auth-signed-out").innerHTML =
-        '<p class="hint" style="margin-top:0">' +
-        'Sign-in is not configured on this server yet. Atomic still works fully ' +
-        'anonymously — all features except the download scanner are available to everyone.' +
-        "</p>";
-    }
-  }
-
-  function bindAuth() {
-    $("magic-form").addEventListener("submit", async function (e) {
-      e.preventDefault();
-      var email = $("magic-email").value.trim();
-      if (!email) return;
-      $("magic-hint").textContent = "Sending link…";
-      try {
-        var res = await fetch("/api/auth/magic/request", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email }),
-        });
-        var data = await res.json();
-        if (data.ok) {
-          $("magic-hint").textContent = data.message || "Check your inbox for a sign-in link.";
-        } else {
-          $("magic-hint").textContent = data.error || "Could not send sign-in link.";
-        }
-      } catch (err) {
-        $("magic-hint").textContent = "Could not send sign-in link.";
-      }
-    });
-
-    $("google-signin").addEventListener("click", function () {
-      window.location.href = "/api/auth/google/start";
-    });
-
-    $("sign-out").addEventListener("click", async function () {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(function () {});
-      me = null;
-      applyAuthUI();
-    });
-
-    $("scan-form").addEventListener("submit", async function (e) {
-      e.preventDefault();
-      var url = $("scan-url").value.trim();
-      if (!url) return;
-      var out = $("scan-result");
-      out.style.display = "block";
-      out.textContent = "Scanning…";
-      try {
-        var res = await fetch("/api/scan/file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: url }),
-          credentials: "same-origin",
-        });
-        var data = await res.json();
-        out.textContent = JSON.stringify(data, null, 2);
-      } catch (err) {
-        out.textContent = "Scan failed.";
-      }
-    });
-  }
-
   /* ---------------- Boot ---------------- */
   document.addEventListener("DOMContentLoaded", function () {
     // Modal open/close wiring.
     var openSettings = function () { refreshSettingsUI(); openModal("settings-modal"); };
-    var openAuth = function () { refreshAuth().then(function () { openModal("auth-modal"); }); };
     $("open-settings").addEventListener("click", openSettings);
     $("open-settings-home").addEventListener("click", openSettings);
     $("open-submit-home").addEventListener("click", function () {
@@ -760,8 +674,29 @@
       openModal("settings-modal");
       setTimeout(function () { $("submit-url").focus(); }, 80);
     });
-    $("open-auth").addEventListener("click", openAuth);
-    $("open-auth-home").addEventListener("click", openAuth);
+    // Safe-view sandbox: any "Safe view" button on a result card opens the
+    // URL through /proxy inside a locked-down iframe (no top-frame nav,
+    // no cookies, no storage, script-only sandbox). Event-delegated so new
+    // result lists keep working.
+    document.body.addEventListener("click", function (ev) {
+      var btn = ev.target.closest && ev.target.closest("[data-safe-view]");
+      if (!btn) return;
+      ev.preventDefault();
+      var target = btn.getAttribute("data-safe-view");
+      if (!target) return;
+      var body = $("safeview-body");
+      if (!body) return;
+      body.innerHTML = "";
+      var frame = document.createElement("iframe");
+      frame.src = "/proxy?url=" + encodeURIComponent(target);
+      frame.setAttribute("sandbox", "allow-scripts allow-forms");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.setAttribute("loading", "lazy");
+      frame.title = "Safe view: " + target;
+      frame.className = "vm-frame";
+      body.appendChild(frame);
+      openModal("safeview-modal");
+    });
     Array.prototype.forEach.call(document.querySelectorAll(".modal-close"), function (b) {
       b.addEventListener("click", function (e) {
         var m = e.target.closest(".modal-backdrop");
@@ -778,8 +713,6 @@
     });
 
     bindSettings();
-    bindAuth();
-    refreshAuth();
 
     // Tab wiring.
     Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function (b) {
