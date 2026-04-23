@@ -387,9 +387,25 @@
     var data;
     try {
       var res = await fetch(u);
-      data = await res.json();
+      // Always try to parse JSON, but tolerate a non-JSON body (e.g. a
+      // reverse proxy 502) so we can still show a clean message instead
+      // of a generic banner.
+      var body = await res.text();
+      try {
+        data = JSON.parse(body);
+      } catch (parseErr) {
+        data = { error: "bad_response", message: "Server returned " + res.status };
+      }
     } catch (e) {
-      $("search-meta").innerHTML = '<span style="color:var(--danger)">Something went wrong. Try again.</span>';
+      $("search-meta").innerHTML = '<span style="color:var(--danger)">Network error — check your connection and try again.</span>';
+      return;
+    }
+    if (data && data.error === "rate_limited") {
+      $("search-meta").innerHTML = '<span style="color:var(--text-dim)">Slow down — rate limited. Try again in 30 seconds.</span>';
+      return;
+    }
+    if (data && data.error) {
+      $("search-meta").innerHTML = '<span style="color:var(--text-dim)">Search temporarily unavailable: ' + esc(data.message || data.error) + '. Try again.</span>';
       return;
     }
     var elapsed = ((performance.now() - t0) / 1000).toFixed(2);

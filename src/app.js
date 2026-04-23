@@ -449,6 +449,30 @@ export function buildApp() {
   });
 
   app.get("/api/search", async (c) => {
+    try {
+      return await searchHandler(c);
+    } catch (err) {
+      // Never let a thrown error bubble up as a 500 HTML page — the
+      // frontend decodes JSON unconditionally, and a non-JSON body is
+      // what causes the user-visible "Something went wrong" banner.
+      // Log the root cause for ops but always reply with a shaped JSON
+      // error the UI can render gracefully.
+      console.error("/api/search error:", err?.stack || err);
+      return c.json(
+        {
+          query: (c.req.query("q") || "").trim(),
+          results: [],
+          page: 1,
+          hasMore: false,
+          error: "search_failed",
+          message: String(err?.message || err || "search failed"),
+        },
+        200
+      );
+    }
+  });
+
+  async function searchHandler(c) {
     // Rate limit — 60 rpm per client (hashed-IP token bucket, in-memory only).
     if (!rateLimitTake(c, 1)) {
       return c.json(
@@ -629,7 +653,7 @@ export function buildApp() {
     // index keeps growing in the background without adding latency.
     growIndex(merged, { eager: 10, queueCap: 30 }).catch(() => {});
     return c.json(out);
-  });
+  }
 
   app.get("/api/images", async (c) => {
     const q = (c.req.query("q") || "").trim();

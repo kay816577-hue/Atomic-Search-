@@ -22,7 +22,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
-const DEFAULT_REPO = "kayan4bit/Atomic-Search-";
+const DEFAULT_REPO = "kay816577-hue/Atomic-Search-";
 const DEFAULT_BRANCH = "atomic-search-index";
 const INDEX_FILE = "atomic.db";
 // Files the crawler might produce alongside the main DB (WAL/SHM).
@@ -82,8 +82,10 @@ function runGit(args, { cwd, env: extraEnv } = {}) {
 }
 
 function getConfig() {
+  // Resolve repo/branch even without a PAT — the public read-only restore
+  // path below only needs owner/repo/branch. PAT is required only for
+  // pushing new snapshots back.
   const token = env("GH_INDEX_PAT", "");
-  if (!token) return null;
   let repo = env("GH_INDEX_REPO", "") || env("GITHUB_REPOSITORY", "") || env("GH_REPO", "") || DEFAULT_REPO;
   repo = repo.replace(/^https?:\/\/github.com\//i, "").replace(/\.git$/i, "");
   const branch = env("GH_INDEX_BRANCH", DEFAULT_BRANCH);
@@ -94,8 +96,81 @@ function getConfig() {
   // Never embed tokens in URLs checked into history. We use Basic-auth via
   // the `http.extraheader` config so `git remote -v` stays clean.
   const remote = `https://github.com/${repo}.git`;
-  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  return { token, repo, branch, interval, dataDir, userName, userEmail, remote, basic };
+  const basic = token ? Buffer.from(`x-access-token:${token}`).toString("base64") : "";
+  return {
+    token,
+    canPush: !!token,
+    repo,
+    branch,
+    interval,
+    dataDir,
+    userName,
+    userEmail,
+    remote,
+    basic,
+  };
+}
+
+// Public read-only restore: fetch the latest atomic.db from the data branch
+// via raw.githubusercontent.com. Works for public repos with no auth. This
+// is what makes the server restart-safe on Render even if GH_INDEX_PAT is
+// never configured.
+async function restoreFromPublicUrl(cfg) {
+  const url = `https://raw.githubusercontent.com/${cfg.repo}/${cfg.branch}/${INDEX_FILE}`;
+  log("restoring via public URL", url);
+  let res;
+  try {
+    res = await fetch(url, {
+      redirect: "follow",
+      headers: { "user-agent": "atomic-search-restore" },
+    });
+  } catch (e) {
+    log("public restore network error:", e?.message || e);
+    syncHealth.errors += 1;
+    syncHealth.lastError = "public-restore-network-error";
+    return false;
+  }
+  if (res.status === 404) {
+    log("no snapshot on data branch yet (404)");
+    return false;
+  }
+  if (!res.ok) {
+    log("public restore failed:", res.status);
+    syncHealth.errors += 1;
+    syncHealth.lastError = `public-restore-${res.status}`;
+    return false;
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0) return false;
+  // SQLite files start with the magic string "SQLite format 3\0". Reject
+  // anything else so we don't overwrite a working DB with HTML (e.g. a
+  // Cloudflare/GitHub error page that happened to return 200).
+  const magic = buf.slice(0, 15).toString("utf8");
+  if (magic !== "SQLite format 3") {
+    log("public restore: unexpected magic, skipping");
+    syncHealth.errors += 1;
+    syncHealth.lastError = "public-restore-bad-magic";
+    return false;
+  }
+  await fsp.mkdir(cfg.dataDir, { recursive: true });
+  const dst = path.join(cfg.dataDir, INDEX_FILE);
+  // Don't regress a larger local DB (e.g. a dev machine with real data).
+  let localSize = 0;
+  try {
+    if (fs.existsSync(dst)) localSize = (await fsp.stat(dst)).size;
+  } catch { /* ignore */ }
+  if (localSize > buf.length) {
+    log(`live DB (${localSize}B) larger than public snapshot (${buf.length}B) — keeping local`);
+    return false;
+  }
+  for (const f of SQLITE_COMPANIONS) {
+    try { await fsp.unlink(path.join(cfg.dataDir, f)); } catch { /* ignore */ }
+  }
+  await fsp.writeFile(dst, buf);
+  syncHealth.restoredAt = Date.now();
+  syncHealth.restoredSize = buf.length;
+  log(`restored index from public URL (${buf.length}B)`);
+  return true;
 }
 
 async function ensureRepo(cfg) {
@@ -286,20 +361,41 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
 
 /**
  * Public: restores index on boot and schedules periodic snapshot pushes.
- * Safe to call in any environment — no-ops when no PAT is configured.
+ *
+ * Behaviour:
+ *   - Always tries to restore the latest atomic.db from the public data
+ *     branch via raw.githubusercontent.com (no auth needed for public
+ *     repos). Makes Render cold-starts restart-safe with ZERO config.
+ *   - If GH_INDEX_PAT is set, additionally schedules periodic pushes so
+ *     new crawls are persisted back to the data branch.
+ *   - No PAT? Still works — the server just won't grow the persisted
+ *     index between deploys; live meta-search and the restored snapshot
+ *     keep working normally.
  */
 export async function startIndexSync() {
   if (started) return;
   started = true;
   const cfg = getConfig();
-  if (!cfg) {
-    log("GH_INDEX_PAT not set — index will not be persisted across restarts");
+  syncHealth.configured = cfg.canPush;
+  syncHealth.branch = cfg.branch;
+
+  // Always try the public restore first — cheapest possible cold-start
+  // recovery and requires no secrets.
+  await restoreFromPublicUrl(cfg).catch((e) => {
+    log("public restore threw:", e?.message || e);
+  });
+
+  if (!cfg.canPush) {
+    log(
+      "GH_INDEX_PAT not set — read-only restore only. Set the PAT to enable " +
+        "persistent index growth across restarts."
+    );
     return;
   }
-  syncHealth.configured = true;
-  syncHealth.branch = cfg.branch;
   try {
     const { workDir, extraHeader } = await ensureRepo(cfg);
+    // If the git clone gave us a newer/bigger snapshot than the public
+    // restore (e.g. private repo, or CDN lag), use that too.
     await restoreIntoDataDir(cfg, workDir);
 
     // Schedule periodic snapshots.
@@ -351,7 +447,7 @@ export async function requestSnapshot() {
  */
 export async function forceSnapshot() {
   const cfg = getConfig();
-  if (!cfg) return false;
+  if (!cfg || !cfg.canPush) return false;
   try {
     const { workDir, extraHeader } = await ensureRepo(cfg);
     await pushSnapshot(cfg, workDir, extraHeader);
