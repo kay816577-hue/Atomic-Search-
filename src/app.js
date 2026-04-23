@@ -23,7 +23,7 @@ import { buildAuthRoutes, currentUser } from "./auth.js";
 import { scanDownload, scanBuffer } from "./scan.js";
 import { crawlOne } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
-import { requestSnapshot, forceSnapshot } from "./git_sync.js";
+import { requestSnapshot, forceSnapshot, getSyncStatus } from "./git_sync.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
@@ -33,9 +33,97 @@ function privacyHeaders() {
   return {
     "Referrer-Policy": "no-referrer",
     "X-Robots-Tag": "noindex, nofollow",
-    "Permissions-Policy": "interest-cohort=(), browsing-topics=()",
+    // interest-cohort/browsing-topics opts out of Chrome's FLoC/Topics API
+    // so even the browser can't attach a tracker profile to our pages.
+    "Permissions-Policy":
+      "interest-cohort=(), browsing-topics=(), geolocation=(), camera=(), microphone=(), payment=()",
     "Cache-Control": "no-store",
   };
+}
+
+function securityHeaders() {
+  // Strict security posture. CSP allows only same-origin resources plus the
+  // two things the UI actually uses: Google's favicon-service for host
+  // icons, and inline CSS inside theme previews. No external scripts, no
+  // frames, no connect-src beyond self so the frontend can't accidentally
+  // beacon off-site.
+  const csp =
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https://www.google.com https://*.gstatic.com https://*.googleusercontent.com; " +
+    "connect-src 'self'; " +
+    "frame-ancestors 'none'; " +
+    "form-action 'self'; " +
+    "base-uri 'self'; " +
+    "object-src 'none'";
+  return {
+    "Content-Security-Policy": csp,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    // HSTS is only meaningful over TLS; safe to set anyway and let browsers
+    // ignore it on HTTP. Two years, no preload (operators can opt in).
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+  };
+}
+
+// ---------- Per-IP rate limiter (token bucket) ----------
+// Keyed by a non-cryptographic hash of the client IP (we don't need it to
+// be reversible — we just want NOT to store raw IPs). Bucket state is
+// entirely in memory and is garbage-collected when the bucket refills.
+const RATE_CAPACITY = 60;        // 60 requests…
+const RATE_REFILL_PER_MS = 60 / 60000; // …per minute, refilling continuously
+const RATE_BUCKETS = new Map(); // hash -> { tokens, updated }
+const RATE_MAX_BUCKETS = 8192;
+
+function hashIp(ip) {
+  // 32-bit FNV-1a. Fast, cross-runtime, no node:crypto dependency.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < ip.length; i++) {
+    h ^= ip.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+function getClientIp(c) {
+  // Honour common proxy headers when the deployment explicitly trusts them
+  // (set TRUSTED_PROXY=1). Otherwise we fall back to a constant — we don't
+  // want to rate-limit by a forgeable header.
+  const trusted = (typeof process !== "undefined" && process.env?.TRUSTED_PROXY) === "1";
+  if (trusted) {
+    const xff = c.req.header("x-forwarded-for");
+    if (xff) return xff.split(",")[0].trim();
+    const cf = c.req.header("cf-connecting-ip");
+    if (cf) return cf.trim();
+  }
+  return "anon"; // single bucket — better than a per-deployment flood
+}
+
+function rateLimitTake(c, cost = 1) {
+  const key = hashIp(getClientIp(c));
+  const now = Date.now();
+  let b = RATE_BUCKETS.get(key);
+  if (!b) {
+    // Evict oldest bucket when we're about to exceed the cap (rough LRU —
+    // Map preserves insertion order).
+    if (RATE_BUCKETS.size >= RATE_MAX_BUCKETS) {
+      const firstKey = RATE_BUCKETS.keys().next().value;
+      if (firstKey) RATE_BUCKETS.delete(firstKey);
+    }
+    b = { tokens: RATE_CAPACITY, updated: now };
+    RATE_BUCKETS.set(key, b);
+  } else {
+    const refill = (now - b.updated) * RATE_REFILL_PER_MS;
+    if (refill > 0) {
+      b.tokens = Math.min(RATE_CAPACITY, b.tokens + refill);
+      b.updated = now;
+    }
+  }
+  if (b.tokens < cost) return false;
+  b.tokens -= cost;
+  return true;
 }
 
 // Fire-and-forget: eagerly crawl the top result URLs in parallel so the
@@ -312,13 +400,20 @@ export function buildApp() {
   app.use("*", async (c, next) => {
     await next();
     for (const [k, v] of Object.entries(privacyHeaders())) c.res.headers.set(k, v);
+    for (const [k, v] of Object.entries(securityHeaders())) c.res.headers.set(k, v);
   });
 
   app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
 
   app.get("/api/stats", async (c) => {
     const s = await storageStats();
-    return c.json({ ...s, engines: engineHealth() });
+    return c.json({
+      ...s,
+      engines: engineHealth(),
+      // Lets the UI badge "snapshot synced N min ago" instead of leaving
+      // the user guessing whether persistence is working.
+      indexSync: getSyncStatus(),
+    });
   });
   app.get("/api/health/engines", (c) => c.json(engineHealth()));
 
@@ -354,6 +449,14 @@ export function buildApp() {
   });
 
   app.get("/api/search", async (c) => {
+    // Rate limit — 60 rpm per client (hashed-IP token bucket, in-memory only).
+    if (!rateLimitTake(c, 1)) {
+      return c.json(
+        { query: "", results: [], page: 1, hasMore: false, error: "rate_limited" },
+        429,
+        { "Retry-After": "30" }
+      );
+    }
     const qRaw = (c.req.query("q") || "").trim();
     if (!qRaw) return c.json({ query: "", results: [], page: 1, hasMore: false });
     // Support Google-style `site:domain.com` operator. We strip it from the
@@ -538,6 +641,30 @@ export function buildApp() {
     await cacheSet(key, data, IMAGE_TTL);
     return c.json(data);
   });
+
+  // --- Public v1 API ---
+  // Zero-config, no-key, CORS-open mirror of the internal endpoints so
+  // third-party apps can consume Atomic directly from any Render/Vercel
+  // deployment. Shares the same per-IP rate limit (60 rpm) as the UI.
+  // Intentionally just forwards to the existing handlers via app.fetch
+  // so behaviour stays in lockstep.
+  const v1Forward = (inner) => async (c) => {
+    const url = new URL(c.req.url);
+    url.pathname = inner;
+    const req = new Request(url.toString(), {
+      method: c.req.method,
+      headers: c.req.raw.headers,
+    });
+    const res = await app.fetch(req);
+    // Ensure CORS-open for v1 regardless of caller origin.
+    res.headers.set("Access-Control-Allow-Origin", "*");
+    res.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    return res;
+  };
+  app.get("/api/v1/search", v1Forward("/api/search"));
+  app.get("/api/v1/images", v1Forward("/api/images"));
+  app.get("/api/v1/stats", v1Forward("/api/stats"));
+  app.get("/api/v1/health", v1Forward("/api/health"));
 
   // AI feature removed — the synthesized-answer experience was unreliable
   // at this scale and the user asked to drop it entirely. If we ever want

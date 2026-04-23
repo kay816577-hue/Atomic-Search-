@@ -35,6 +35,25 @@ let syncing = false;
 // that assigns it) so editors / linters don't flag a forward reference.
 let manualTrigger = null;
 
+// Lightweight health counters so the UI / /api/stats can show the index
+// persistence loop working.
+const syncHealth = {
+  configured: false,
+  restoredAt: null,
+  restoredSize: 0,
+  lastPushAt: null,
+  lastPushSize: 0,
+  lastPushSkipped: null,
+  pushes: 0,
+  errors: 0,
+  lastError: null,
+  branch: null,
+};
+
+export function getSyncStatus() {
+  return { ...syncHealth };
+}
+
 function env(name, fallback) {
   if (typeof process === "undefined" || !process.env) return fallback;
   const v = process.env[name];
@@ -177,6 +196,8 @@ async function restoreIntoDataDir(cfg, workDir) {
   for (const f of SQLITE_COMPANIONS) {
     await copyIfExists(path.join(workDir, f), path.join(cfg.dataDir, f));
   }
+  syncHealth.restoredAt = Date.now();
+  syncHealth.restoredSize = snapStat.size;
   log(`restored index snapshot from data branch (${snapStat.size}B)`);
   return true;
 }
@@ -204,6 +225,7 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
     if (!fs.existsSync(live)) return;
     const liveStat = await fsp.stat(live).catch(() => null);
     if (!liveStat || liveStat.size === 0) {
+      syncHealth.lastPushSkipped = "empty-live-db";
       log("live DB is empty — refusing to push (would wipe remote snapshot)");
       return;
     }
@@ -214,6 +236,7 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
     // handle VACUUM / pruning.
     const remoteSize = await snapshotSize(workDir);
     if (remoteSize > 0 && liveStat.size < remoteSize * 0.9) {
+      syncHealth.lastPushSkipped = "smaller-than-remote";
       log(
         `live DB (${liveStat.size}B) is smaller than remote snapshot ` +
         `(${remoteSize}B) — refusing regression`
@@ -228,12 +251,17 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
 
     await runGit(["add", INDEX_FILE, ...SQLITE_COMPANIONS], { cwd: workDir });
     const status = await runGit(["status", "--porcelain"], { cwd: workDir });
-    if (!status.stdout.trim()) return; // nothing changed
+    if (!status.stdout.trim()) {
+      syncHealth.lastPushSkipped = "no-changes";
+      return; // nothing changed
+    }
 
     const msg = `snapshot: atomic.db ${new Date().toISOString()}`;
     const commit = await runGit(["commit", "-m", msg], { cwd: workDir });
     if (commit.code !== 0) {
-      log("commit failed:", (commit.stderr || "").split("\n").pop());
+      syncHealth.errors += 1;
+      syncHealth.lastError = (commit.stderr || "commit failed").split("\n").pop();
+      log("commit failed:", syncHealth.lastError);
       return;
     }
     const push = await runGit(
@@ -241,10 +269,16 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
       { cwd: workDir }
     );
     if (push.code !== 0) {
-      log("push failed:", (push.stderr || "").split("\n").pop());
+      syncHealth.errors += 1;
+      syncHealth.lastError = (push.stderr || "push failed").split("\n").pop();
+      log("push failed:", syncHealth.lastError);
       return;
     }
-    log("snapshot pushed");
+    syncHealth.pushes += 1;
+    syncHealth.lastPushAt = Date.now();
+    syncHealth.lastPushSize = liveStat.size;
+    syncHealth.lastPushSkipped = null;
+    log(`snapshot pushed (${liveStat.size}B)`);
   } finally {
     syncing = false;
   }
@@ -262,6 +296,8 @@ export async function startIndexSync() {
     log("GH_INDEX_PAT not set — index will not be persisted across restarts");
     return;
   }
+  syncHealth.configured = true;
+  syncHealth.branch = cfg.branch;
   try {
     const { workDir, extraHeader } = await ensureRepo(cfg);
     await restoreIntoDataDir(cfg, workDir);
