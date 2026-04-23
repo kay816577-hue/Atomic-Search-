@@ -12,7 +12,7 @@
 //   GH_INDEX_BRANCH    Branch to push index snapshots to (default
 //                       "atomic-search-index").
 //   DATA_DIR           Where the live SQLite DB lives (default ./data).
-//   GH_INDEX_INTERVAL  Push interval in seconds (default 600 = 10 min).
+//   GH_INDEX_INTERVAL  Push interval in seconds (default 120 = 2 min).
 //   GH_INDEX_USER      Committer name (default "atomic-search-bot").
 //   GH_INDEX_EMAIL     Committer email (default "atomic-search-bot@users.noreply.github.com").
 
@@ -89,7 +89,12 @@ function getConfig() {
   let repo = env("GH_INDEX_REPO", "") || env("GITHUB_REPOSITORY", "") || env("GH_REPO", "") || DEFAULT_REPO;
   repo = repo.replace(/^https?:\/\/github.com\//i, "").replace(/\.git$/i, "");
   const branch = env("GH_INDEX_BRANCH", DEFAULT_BRANCH);
-  const interval = Math.max(60, Number(env("GH_INDEX_INTERVAL", "600")) || 600) * 1000;
+  // Default 120s: Render free-tier idles quickly with low traffic, and we
+  // want every 2 minutes of crawler growth durably persisted before the
+  // instance gets put to sleep. Floor at 30s to avoid misconfigured loops
+  // spamming GitHub — most free-tier hosts still shut down with enough
+  // warning (SIGTERM flush) that this is usually overkill, but it's cheap.
+  const interval = Math.max(30, Number(env("GH_INDEX_INTERVAL", "120")) || 120) * 1000;
   const dataDir = path.resolve(env("DATA_DIR", path.join(process.cwd(), "data")));
   const userName = env("GH_INDEX_USER", "atomic-search-bot");
   const userEmail = env("GH_INDEX_EMAIL", "atomic-search-bot@users.noreply.github.com");

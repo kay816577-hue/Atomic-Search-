@@ -74,9 +74,9 @@ restarts automatically — you don't need the GitHub snapshot mode.
    | `GH_INDEX_PAT` | A GitHub PAT with `contents:write` on your fork |
    | `GH_INDEX_REPO` | `your-user/your-fork` (defaults to the render default) |
    | `GH_INDEX_BRANCH` | `atomic-search-index` (default) |
-   | `GH_INDEX_INTERVAL` | `600` (seconds between snapshots, default) |
+   | `GH_INDEX_INTERVAL` | `120` (seconds between snapshots, default) |
 
-   With those set, every 10 min the running server commits its SQLite DB
+   With those set, every 2 min the running server commits its SQLite DB
    to the chosen branch. On the next deploy/restart, Atomic restores from
    that branch BEFORE the HTTP server or crawler starts, so the index
    stays in sync across GitHub, the site, and the server forever.
@@ -120,7 +120,7 @@ clients, never logged, and never used for anything else.
 | `GH_INDEX_PAT` | GitHub PAT (`contents:write`) for index persistence |
 | `GH_INDEX_REPO` | Override the repo used for snapshots |
 | `GH_INDEX_BRANCH` | Branch name for snapshots (default `atomic-search-index`) |
-| `GH_INDEX_INTERVAL` | Snapshot interval in seconds (default 600) |
+| `GH_INDEX_INTERVAL` | Snapshot interval in seconds (default 120 = 2 min) |
 | `ENABLE_MARGINALIA` | Set to `1` to also query the Marginalia small-web engine |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | "Continue with Google" sign-in. Redirect URI: `https://<host>/api/auth/google/callback` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Email magic-link sign-in |
@@ -143,7 +143,7 @@ badges, sign-in, or cross-restart persistence.
    pulls from that queue every 5 seconds, fetches the page, strips it to
    plain text, and writes it to SQLite. Stale pages (>14 days old) are
    re-crawled hourly.
-4. Every `GH_INDEX_INTERVAL` seconds (default 600 = 10 min) the SQLite
+4. Every `GH_INDEX_INTERVAL` seconds (default 120 = 2 min) the SQLite
    file is committed + pushed to the data branch of the configured repo.
    On boot, `startIndexSync()` runs BEFORE the HTTP server or crawler
    start, so the index is always restored to the latest good snapshot

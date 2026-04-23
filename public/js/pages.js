@@ -21,7 +21,7 @@
         '<ul>' +
         '<li><strong>Seven engines, one request.</strong> Startpage, Brave, Bing, DuckDuckGo, Wikipedia, Hacker News, and Reddit are all queried in parallel and their results rank-fused.</li>' +
         '<li><strong>Our own growing index.</strong> Every search grows a private SQLite index of the pages people actually visit. Strong matches from that index are promoted with a visible "FROM OUR OWN INDEX" badge.</li>' +
-        '<li><strong>Restart-safe.</strong> On Render / Vercel, the SQLite index is snapshotted to a GitHub data branch every 10 min and restored on boot — so the site, the running server, and GitHub stay in sync forever.</li>' +
+        '<li><strong>Restart-safe.</strong> On Render / Vercel, the SQLite index is snapshotted to a GitHub data branch every 2 min and restored on boot — so the site, the running server, and GitHub stay in sync forever.</li>' +
         '<li><strong>Zero-config public API.</strong> Anyone can hit <code>/api/v1/search</code> from anywhere, no key required.</li>' +
         '</ul>' +
         '<h3>Open source</h3>' +
@@ -49,7 +49,7 @@
         '<li><code>GH_INDEX_PAT</code> — fine-grained PAT with <em>Contents: Read and Write</em> on your fork.</li>' +
         '<li><code>GH_INDEX_REPO</code> — <code>your-user/your-fork</code>.</li>' +
         '<li><code>GH_INDEX_BRANCH</code> — default <code>atomic-search-index</code>.</li>' +
-        '<li><code>GH_INDEX_INTERVAL</code> — snapshot interval in seconds, default 600.</li>' +
+        '<li><code>GH_INDEX_INTERVAL</code> — snapshot interval in seconds, default 120.</li>' +
         '</ul></li>' +
         '<li>Deploy. The server will restore from GitHub on every boot <em>before</em> the HTTP listener starts, so the index is always consistent.</li>' +
         '</ol>' +

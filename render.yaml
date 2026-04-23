@@ -20,11 +20,11 @@ services:
       - key: GH_INDEX_PAT
         sync: false
       - key: GH_INDEX_REPO
-        value: kayan4bit/Atomic-Search-
+        value: kay816577-hue/Atomic-Search-
       - key: GH_INDEX_BRANCH
         value: atomic-search-index
       - key: GH_INDEX_INTERVAL
-        value: "600"
+        value: "120"
 
       # --- URL + download safety checks (VirusTotal). Free key at
       # https://www.virustotal.com/gui/my-apikey — 500 req/day.
