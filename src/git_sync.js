@@ -30,6 +30,10 @@ const SQLITE_COMPANIONS = ["atomic.db-wal", "atomic.db-shm"];
 
 let started = false;
 let syncing = false;
+// Manual-trigger hook set by startIndexSync(); requestSnapshot() uses it to
+// kick a push without re-cloning. Declared here (not below the function
+// that assigns it) so editors / linters don't flag a forward reference.
+let manualTrigger = null;
 
 function env(name, fallback) {
   if (typeof process === "undefined" || !process.env) return fallback;
@@ -129,6 +133,13 @@ async function copyIfExists(src, dst) {
 
 /**
  * Pulls the latest snapshot from the data branch into DATA_DIR.
+ *
+ * Called BEFORE the HTTP server starts serving and before the crawler ever
+ * opens the DB — so we can always overwrite the local DATA_DIR without
+ * fear of racing with a writer. This is critical on Render's free tier:
+ * every deploy wipes the filesystem, so if we didn't overwrite here the
+ * crawler would happily boot against an empty DB and the next periodic
+ * push would wipe the remote snapshot too.
  */
 async function restoreIntoDataDir(cfg, workDir) {
   await fsp.mkdir(cfg.dataDir, { recursive: true });
@@ -137,20 +148,49 @@ async function restoreIntoDataDir(cfg, workDir) {
     log("no snapshot in data branch yet — starting fresh");
     return false;
   }
+  const snapStat = await fsp.stat(snap).catch(() => null);
+  if (!snapStat || snapStat.size === 0) {
+    log("snapshot file is empty — skipping restore");
+    return false;
+  }
   const dst = path.join(cfg.dataDir, INDEX_FILE);
-  // Only restore if the live DB doesn't already exist (first boot) OR if it's
-  // empty (race: crawler already wrote but we haven't touched it).
+  // Prefer the snapshot over whatever happens to be on disk. If the local
+  // DB is larger (e.g. running locally with real data), keep it — but for
+  // free-tier Render, `dst` is gone after every deploy so the snapshot
+  // always wins.
+  let localSize = 0;
   try {
-    const stat = fs.existsSync(dst) ? await fsp.stat(dst) : null;
-    if (stat && stat.size > 0) {
-      // Merge strategy: keep local; let periodic push sync the union back up.
-      log("live DB already exists, keeping local copy");
-      return false;
-    }
+    if (fs.existsSync(dst)) localSize = (await fsp.stat(dst)).size;
   } catch { /* ignore */ }
+  if (localSize > snapStat.size) {
+    log(
+      `live DB (${localSize}B) larger than snapshot (${snapStat.size}B) — keeping local`
+    );
+    return false;
+  }
+  // Wipe any stale WAL/SHM the new snapshot might be inconsistent with.
+  for (const f of SQLITE_COMPANIONS) {
+    try { await fsp.unlink(path.join(cfg.dataDir, f)); } catch { /* ignore */ }
+  }
   await fsp.copyFile(snap, dst);
-  log("restored index snapshot from data branch");
+  // Also restore companions if the snapshot has them.
+  for (const f of SQLITE_COMPANIONS) {
+    await copyIfExists(path.join(workDir, f), path.join(cfg.dataDir, f));
+  }
+  log(`restored index snapshot from data branch (${snapStat.size}B)`);
   return true;
+}
+
+// Returns the size of the last-known-good snapshot in the working clone,
+// used as a floor when deciding whether to push a new snapshot. Never
+// overwrite a fatter remote snapshot with a near-empty local one.
+async function snapshotSize(workDir) {
+  try {
+    const s = await fsp.stat(path.join(workDir, INDEX_FILE));
+    return s.size || 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -162,6 +202,24 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
   try {
     const live = path.join(cfg.dataDir, INDEX_FILE);
     if (!fs.existsSync(live)) return;
+    const liveStat = await fsp.stat(live).catch(() => null);
+    if (!liveStat || liveStat.size === 0) {
+      log("live DB is empty — refusing to push (would wipe remote snapshot)");
+      return;
+    }
+    // Safety valve: if the last-known-good snapshot on the data branch is
+    // substantially larger than what we're about to push, something has
+    // gone wrong locally (fresh boot, crash-truncated DB, etc.) — refuse
+    // to regress the remote snapshot. Tolerate a small shrink (<10%) to
+    // handle VACUUM / pruning.
+    const remoteSize = await snapshotSize(workDir);
+    if (remoteSize > 0 && liveStat.size < remoteSize * 0.9) {
+      log(
+        `live DB (${liveStat.size}B) is smaller than remote snapshot ` +
+        `(${remoteSize}B) — refusing regression`
+      );
+      return;
+    }
     // Copy main DB + SQLite WAL companions so the snapshot is consistent.
     await copyIfExists(live, path.join(workDir, INDEX_FILE));
     for (const f of SQLITE_COMPANIONS) {
@@ -218,6 +276,12 @@ export async function startIndexSync() {
     };
     setInterval(tick, cfg.interval).unref?.();
 
+    // Expose a manual "push now" hook the admin endpoint can call when the
+    // user submits a site or the crawler just indexed a batch of new pages
+    // (so the snapshot reflects reality immediately, not up to 10 minutes
+    // later).
+    manualTrigger = tick;
+
     // Flush on graceful shutdown so we don't lose late writes.
     const flush = () => {
       tick().finally(() => process.exit(0));
@@ -226,6 +290,21 @@ export async function startIndexSync() {
     process.once("SIGINT", flush);
   } catch (e) {
     log("sync init failed:", e?.message || e);
+  }
+}
+
+/**
+ * Kick a snapshot push using the already-initialised working clone, if
+ * there is one. Much cheaper than `forceSnapshot` (which re-clones).
+ * Returns true if a tick was kicked, false otherwise.
+ */
+export async function requestSnapshot() {
+  if (!manualTrigger) return false;
+  try {
+    await manualTrigger();
+    return true;
+  } catch {
+    return false;
   }
 }
 

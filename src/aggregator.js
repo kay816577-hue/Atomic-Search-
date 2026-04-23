@@ -10,22 +10,36 @@ import { isNsfwResult, isNsfwText } from "./nsfw.js";
 // Internal engine ids are used only for RRF / debugging. They are never
 // leaked to the client (the /api/search response reports results as sourced
 // from "atomic" only).
-// Startpage gives us Google-sourced results through a privacy-preserving
-// proxy, and Wikipedia gives us a reliable knowledge card for entity
-// queries. That's the whole meta layer — the other engines were
-// inconsistent and polluting results with off-topic pages (e.g. fishing
-// rafts for "raft consensus algorithm"). The growing Atomic index fills
-// in long-tail coverage.
+// Layered for coverage + privacy:
+//   - Startpage     : Google results through a privacy-preserving proxy
+//   - Brave         : independent index, great for recent / long-tail web
+//   - primary (Bing): broad corporate index with an opt-out locale pin
+//   - DuckDuckGo    : yet another Bing-flavoured view for agreement weight
+//   - Wikipedia     : reliable knowledge cards for entity queries
+//   - Hacker News   : tech / news discussion
+//   - Reddit        : real-user opinion for niche questions
+// Marginalia is available as a runner but disabled by default (its small-web
+// results kept landing on the first page for mainstream queries). Enable
+// via ENABLE_MARGINALIA=1 if you specifically want small-web coverage.
+// All engines are hit server-side with spoofed UA + no cookies → scraping
+// happens on the user's behalf with no identity leak. The growing Atomic
+// index fills in long-tail coverage across repeat searches.
 const ENGINES = [
   "startpage",
+  "brave",
+  "primary",
+  "ddg",
   "wikipedia",
   "hackernews",
   "reddit",
+  ...(((typeof process !== "undefined" && process.env?.ENABLE_MARGINALIA) === "1")
+    ? ["marginalia"]
+    : []),
 ];
 
-// With a smaller engine set we fan out more pages per engine so result
-// volume stays healthy.
-const ENGINE_PAGES_PER_META = 5;
+// With more engines online we can drop per-engine pagination fan-out
+// slightly — we get more cross-source agreement instead of more pages.
+const ENGINE_PAGES_PER_META = 3;
 
 // Pool of public SearXNG instances — tried round-robin until one answers.
 const SEARXNG_POOL = [
@@ -38,12 +52,110 @@ const SEARXNG_POOL = [
   "https://search.sapti.me",
 ];
 
-// Reciprocal Rank Fusion with a cross-source agreement boost. When the
-// exact same URL shows up in N different engines, that's a very strong
-// signal — we multiply the RRF score so cross-confirmed pages float to
-// the top. Also tracks which engines voted for each URL so the UI can
-// show "X sources agree".
-function rankBlend(lists) {
+// Hosts we trust enough to give a small ranking boost to when they match
+// the query well. These aren't hard overrides — they're just priors that
+// nudge genuinely-relevant popular-site results above spammy lookalikes.
+// Tiered so e.g. Wikipedia outranks a forum even when both match equally.
+const POPULAR_HOSTS = {
+  // tier 3 — authoritative reference for the topic
+  "en.wikipedia.org": 3,
+  "wikipedia.org": 3,
+  "developer.mozilla.org": 3,
+  "mdn.io": 3,
+  "docs.python.org": 3,
+  "pkg.go.dev": 3,
+  "cppreference.com": 3,
+  "rust-lang.org": 3,
+  "doc.rust-lang.org": 3,
+  "ecma-international.org": 3,
+  "whatwg.org": 3,
+  "w3.org": 3,
+  "rfc-editor.org": 3,
+  "datatracker.ietf.org": 3,
+  "kernel.org": 3,
+  // tier 2 — broadly reliable technical / educational / newsy hubs
+  "github.com": 2,
+  "stackoverflow.com": 2,
+  "stackexchange.com": 2,
+  "arxiv.org": 2,
+  "wolframalpha.com": 2,
+  "archive.org": 2,
+  "britannica.com": 2,
+  "khanacademy.org": 2,
+  "nature.com": 2,
+  "science.org": 2,
+  "nytimes.com": 2,
+  "bbc.com": 2,
+  "bbc.co.uk": 2,
+  "theguardian.com": 2,
+  "reuters.com": 2,
+  "apnews.com": 2,
+  "wsj.com": 2,
+  "economist.com": 2,
+  "ft.com": 2,
+  "nasa.gov": 2,
+  "who.int": 2,
+  "cdc.gov": 2,
+  "nih.gov": 2,
+  // tier 1 — genuine community content
+  "reddit.com": 1,
+  "news.ycombinator.com": 1,
+  "medium.com": 1,
+  "dev.to": 1,
+  "quora.com": 1,
+  "youtube.com": 1,
+};
+
+function popularHostBoost(url) {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    if (POPULAR_HOSTS[h]) return POPULAR_HOSTS[h];
+    // Allow matching on parent domains too (e.g. en.wikipedia.org hits the
+    // `wikipedia.org` entry if present).
+    for (const [host, tier] of Object.entries(POPULAR_HOSTS)) {
+      if (h.endsWith("." + host)) return tier;
+    }
+  } catch { /* ignore */ }
+  return 0;
+}
+
+// Simple keyword-relevance score for an item. Not an embedding — we don't
+// want to drag a 400MB model onto Render's free tier — but good enough to
+// push results whose title+snippet actually cover the query tokens above
+// results that just happen to share a word. Returns a 0..~1 scalar.
+const QRY_STOPWORDS = new Set([
+  "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
+  "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
+  "from", "what", "who", "why", "how", "do", "does", "did",
+]);
+function keywordRelevance(item, tokens) {
+  if (!tokens || !tokens.length) return 0;
+  const title = (item.title || "").toLowerCase();
+  const snip = (item.snippet || "").toLowerCase();
+  const hay = title + " " + snip;
+  let titleHits = 0;
+  let hayHits = 0;
+  for (const t of tokens) {
+    if (title.includes(t)) titleHits += 1;
+    if (hay.includes(t)) hayHits += 1;
+  }
+  const titleCov = titleHits / tokens.length;
+  const hayCov = hayHits / tokens.length;
+  // Title coverage dominates (fraction of tokens present in title), with a
+  // bonus for whole-query phrase match in the title.
+  let r = titleCov * 0.7 + hayCov * 0.3;
+  const phrase = tokens.join(" ");
+  if (phrase.length >= 4 && title.includes(phrase)) r += 0.2;
+  return Math.min(1.2, r);
+}
+
+// Reciprocal Rank Fusion with a cross-source agreement boost + popular-site
+// prior + keyword relevance weighting. When the exact same URL shows up in
+// N different engines, that's a very strong signal — we multiply the RRF
+// score so cross-confirmed pages float to the top. A matching popular host
+// adds a small flat bonus, and a keyword-relevant title nudges the score
+// up further so "matching keyword on a popular site" surfaces correctly.
+function rankBlend(lists, query = "") {
   const k = 60;
   const scores = new Map();
   const sources = new Map(); // url -> Set<engine>
@@ -60,18 +172,33 @@ function rankBlend(lists) {
       if (!items.has(key)) items.set(key, { ...item, url: key });
     });
   }
+  const qTokens = (query || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !QRY_STOPWORDS.has(t));
   const merged = [...items.values()].map((it) => {
     const baseline = scores.get(it.url) || 0;
     const srcs = sources.get(it.url) || new Set();
     // 1 source: x1.0 (no boost), 2: x1.4, 3: x1.7, 4+: x1.9 — capped so
     // one widely-shared link can't bury a very strong but single-source hit.
     const agree = srcs.size;
-    const boost = agree <= 1 ? 1 : Math.min(1.9, 1 + Math.log2(agree) * 0.6);
+    const agreeBoost = agree <= 1 ? 1 : Math.min(1.9, 1 + Math.log2(agree) * 0.6);
+    const popTier = popularHostBoost(it.url);
+    // Popular-host bonus is small (fractional) and additive on the RRF
+    // baseline BEFORE the agreement multiplier, so it layers cleanly.
+    const popBonus = popTier * 0.015;
+    // Keyword relevance multiplier: 0.8x at no coverage, ~1.5x at full
+    // coverage + phrase match. Keeps truly-irrelevant popular-site pages
+    // from surfacing just because their host is on the list.
+    const kw = keywordRelevance(it, qTokens);
+    const kwMult = 0.8 + kw * 0.6;
     return {
       ...it,
-      score: baseline * boost,
+      score: (baseline + popBonus) * agreeBoost * kwMult,
       engines: Array.from(srcs),
       agreement: agree,
+      popTier,
     };
   });
   merged.sort((a, b) => b.score - a.score);
@@ -169,32 +296,62 @@ async function primary(q, page = 1) {
 
 async function brave(q, page = 1) {
   const offset = (page - 1) * 10;
-  const res = await privateFetch(
-    `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web&offset=${offset}`,
-    { timeout: 8000 }
-  );
+  const url =
+    `https://search.brave.com/search?q=${encodeURIComponent(q)}` +
+    `&source=web&offset=${offset}&spellcheck=0&safesearch=moderate`;
+  // Brave occasionally 429s scrapers — if so, we already catch 4xx below and
+  // let the self-healing engine tracker shove it into cooldown.
+  const res = await privateFetch(url, {
+    headers: {
+      Referer: "https://search.brave.com/",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    timeout: 8000,
+  });
   if (res.status >= 400) return [];
   const html = await res.text();
+  // Brave's "press continue" interstitial when bot-detection trips.
+  if (/bot[- ]?protection|captcha|challenge/i.test(html)) return [];
   const { document } = parseHTML(html);
   const out = [];
-  const nodes = document.querySelectorAll(
-    "[data-type='web'] a, #results .snippet a, .snippet-title, .result a"
+  // Layout has drifted over time: try the snippet/result containers first
+  // (they pin one link per result → better snippet extraction), then fall
+  // back to a link-scan.
+  const containers = document.querySelectorAll(
+    "[data-type='web'], .snippet, #results .snippet, article.snippet, .result"
   );
   const seen = new Set();
-  for (const a of nodes) {
+  for (const c of containers) {
+    const a =
+      c.querySelector("a.result-header, a.h, .snippet-title a, a[href^='http']");
+    if (!a) continue;
     const href = a.getAttribute("href") || "";
     if (!href.startsWith("http") || seen.has(href)) continue;
-    const title = stripTags(a.textContent || "");
+    const title = stripTags(
+      c.querySelector(".snippet-title, .title, h2, h3, .result-header")
+        ?.textContent || a.textContent || ""
+    );
     if (!title) continue;
     seen.add(href);
-    let snippet = "";
-    const container = a.closest(".snippet, [data-type='web'], .result") || a.parentElement;
-    if (container) {
-      const p = container.querySelector(".snippet-description, .snippet-content, p");
-      snippet = stripTags(p?.textContent || "");
-    }
+    const snippet = stripTags(
+      c.querySelector(".snippet-description, .snippet-content, .description, p")
+        ?.textContent || ""
+    );
     out.push({ url: href, title, snippet, engine: "brave" });
     if (out.length >= 25) break;
+  }
+  if (out.length === 0) {
+    // Fallback: broad link scan when selectors haven't matched anything.
+    for (const a of document.querySelectorAll("a[href^='http']")) {
+      const href = a.getAttribute("href") || "";
+      if (!href.startsWith("http") || seen.has(href)) continue;
+      if (/search\.brave\.com|brave\.com\//.test(href)) continue;
+      const title = stripTags(a.textContent || "");
+      if (!title || title.length < 6) continue;
+      seen.add(href);
+      out.push({ url: href, title, snippet: "", engine: "brave" });
+      if (out.length >= 20) break;
+    }
   }
   return out;
 }
@@ -534,7 +691,7 @@ export async function metaSearch(q, opts = {}) {
     if (extra.length) flatLists.push(extra);
   }
 
-  let merged = rankBlend(flatLists);
+  let merged = rankBlend(flatLists, query);
   // Preserve the `ownIndex` flag when it's present (so the UI can badge it).
   const ownUrls = new Set();
   for (const extra of extraLists) {

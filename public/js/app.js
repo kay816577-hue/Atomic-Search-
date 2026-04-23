@@ -402,10 +402,17 @@
     }
 
     var ownCount = data.ownIndexCount || results.filter(function (r) { return r.ownIndex; }).length;
+    var ownHtml = ownCount > 0
+      ? '<span class="own-idx-chip" title="Matches from our growing private index">'
+        + '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">'
+        + '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>'
+        + ownCount + ' from our own index</span>'
+      : '<span>0 from our own index</span>';
+    $("search-meta").hidden = false;
     $("search-meta").innerHTML =
       "<span>About " + (data.total || results.length) + " results (" + elapsed + "s)</span>" +
       '<span class="dot"></span>' +
-      "<span>" + ownCount + " from Atomic index</span>";
+      ownHtml;
 
     $("results").hidden = false;
     var instantHtml = instant ? renderInstantCard(instant) : "";
@@ -475,8 +482,9 @@
     }
     var titleHtml = highlight(r.title || r.url, terms);
     var snippetHtml = r.snippet ? highlight(r.snippet, terms) : "";
+    var cls = "result" + (r.ownIndex ? " atomic-hit" : "");
     return (
-      '<article class="result" data-url="' + esc(r.url) + '">' +
+      '<article class="' + cls + '" data-url="' + esc(r.url) + '">' +
       '  <div class="host-line">' +
       '    <span class="fav" style="background-image:url(' + esc(fav) + ')"></span>' +
       '    <div style="display:flex;flex-direction:column;min-width:0;flex:1">' +

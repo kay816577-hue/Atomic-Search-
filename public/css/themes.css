@@ -519,6 +519,131 @@ body[data-theme="cyberpunk"] {
   to   { background-position: 40px 40px, -40px 40px; }
 }
 
+/* ---------- More themes added per request ---------- */
+
+[data-theme="tokyo-night"] {
+  --bg: #1a1b26; --bg-elev: #1f2335; --bg-elev-1: #24283b; --bg-elev-2: #2b304a;
+  --text: #c0caf5; --text-dim: #9aa5ce; --text-mute: #565f89;
+  --accent: #7aa2f7; --accent-2: #bb9af7;
+  --border: #32374a; --border-soft: #232738;
+  --danger: #f7768e; --warn: #e0af68; --ok: #9ece6a;
+  --link: #7dcfff; --link-visited: #bb9af7;
+  --ring: rgba(122, 162, 247, 0.4);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="catppuccin-mocha"] {
+  --bg: #1e1e2e; --bg-elev: #242438; --bg-elev-1: #2a2a3f; --bg-elev-2: #313147;
+  --text: #cdd6f4; --text-dim: #a6adc8; --text-mute: #6c7086;
+  --accent: #cba6f7; --accent-2: #89b4fa;
+  --border: #45475a; --border-soft: #313244;
+  --danger: #f38ba8; --warn: #f9e2af; --ok: #a6e3a1;
+  --link: #89dceb; --link-visited: #f5c2e7;
+  --ring: rgba(203, 166, 247, 0.42);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5; --bg-elev: #e6e9ef; --bg-elev-1: #dce0e8; --bg-elev-2: #ccd0da;
+  --text: #4c4f69; --text-dim: #5c5f77; --text-mute: #7c7f93;
+  --accent: #8839ef; --accent-2: #1e66f5;
+  --border: #bcc0cc; --border-soft: #ccd0da;
+  --danger: #d20f39; --warn: #df8e1d; --ok: #40a02b;
+  --link: #1e66f5; --link-visited: #8839ef;
+  --ring: rgba(136, 57, 239, 0.28);
+  --shadow: 0 4px 24px rgba(76, 79, 105, 0.1);
+  --shadow-soft: 0 1px 6px rgba(76, 79, 105, 0.08);
+}
+
+[data-theme="rose-pine"] {
+  --bg: #191724; --bg-elev: #1f1d2e; --bg-elev-1: #26233a; --bg-elev-2: #2d2a44;
+  --text: #e0def4; --text-dim: #c4c1e0; --text-mute: #908caa;
+  --accent: #eb6f92; --accent-2: #f6c177;
+  --border: #403d59; --border-soft: #2d2a44;
+  --danger: #eb6f92; --warn: #f6c177; --ok: #9ccfd8;
+  --link: #c4a7e7; --link-visited: #ebbcba;
+  --ring: rgba(235, 111, 146, 0.4);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="arctic"] {
+  --bg: #e9f1f9; --bg-elev: #d8e4f1; --bg-elev-1: #c5d6e9; --bg-elev-2: #b3c7de;
+  --text: #1b2e44; --text-dim: #3e5671; --text-mute: #6b8099;
+  --accent: #0ea5e9; --accent-2: #3b82f6;
+  --border: #aec1d8; --border-soft: #c5d6e9;
+  --danger: #e11d48; --warn: #d97706; --ok: #059669;
+  --link: #0369a1; --link-visited: #7e22ce;
+  --ring: rgba(14, 165, 233, 0.3);
+  --shadow: 0 4px 24px rgba(27, 46, 68, 0.1);
+  --shadow-soft: 0 1px 6px rgba(27, 46, 68, 0.08);
+}
+
+[data-theme="amoled"] {
+  /* True-black OLED-friendly. Full black bg saves phone battery; accent
+     stays pop-y so the UI doesn't look flat. */
+  --bg: #000000; --bg-elev: #0a0a0a; --bg-elev-1: #131313; --bg-elev-2: #1c1c1c;
+  --text: #f1f1f1; --text-dim: #a0a0a0; --text-mute: #6a6a6a;
+  --accent: #ff3b30; --accent-2: #30d158;
+  --border: #1f1f1f; --border-soft: #141414;
+  --danger: #ff453a; --warn: #ffd60a; --ok: #30d158;
+  --link: #ff6b61; --link-visited: #d6a6ff;
+  --ring: rgba(255, 59, 48, 0.4);
+  --shadow: 0 10px 50px rgba(0, 0, 0, 0.9);
+  --shadow-soft: 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+
+[data-theme="hacker"] {
+  /* Terminal-green-on-black with scanline vibes. Matrix's cousin — more
+     muted, easier to read for long sessions. */
+  --bg: #0c0f0a; --bg-elev: #0f140c; --bg-elev-1: #131a0f; --bg-elev-2: #1a2314;
+  --text: #d6f5c6; --text-dim: #8ec077; --text-mute: #55793f;
+  --accent: #7fff4e; --accent-2: #c5ff8e;
+  --border: #1f2e17; --border-soft: #16200f;
+  --danger: #ff6b6b; --warn: #ffd166; --ok: #7fff4e;
+  --link: #9eff78; --link-visited: #c5ff8e;
+  --ring: rgba(127, 255, 78, 0.4);
+  --shadow: 0 0 40px rgba(127, 255, 78, 0.12);
+  --shadow-soft: 0 0 14px rgba(127, 255, 78, 0.18);
+}
+
+[data-theme="sunrise"] {
+  --bg: #fff7ed; --bg-elev: #ffedd5; --bg-elev-1: #fed7aa; --bg-elev-2: #fdba74;
+  --text: #3b2513; --text-dim: #7c4a21; --text-mute: #a67c52;
+  --accent: #ea580c; --accent-2: #f59e0b;
+  --border: #fdba74; --border-soft: #fed7aa;
+  --danger: #dc2626; --warn: #b45309; --ok: #15803d;
+  --link: #c2410c; --link-visited: #a16207;
+  --ring: rgba(234, 88, 12, 0.28);
+  --shadow: 0 6px 28px rgba(194, 65, 12, 0.15);
+  --shadow-soft: 0 2px 10px rgba(194, 65, 12, 0.1);
+}
+
+[data-theme="plasma"] {
+  --bg: #090118; --bg-elev: #130228; --bg-elev-1: #1d0438; --bg-elev-2: #29074d;
+  --text: #f5ecff; --text-dim: #d4b9ff; --text-mute: #9574cc;
+  --accent: #c084fc; --accent-2: #f472b6;
+  --border: #3b0d6b; --border-soft: #29074d;
+  --danger: #f43f5e; --warn: #facc15; --ok: #4ade80;
+  --link: #e9d5ff; --link-visited: #fbcfe8;
+  --ring: rgba(192, 132, 252, 0.45);
+  --shadow: 0 0 60px rgba(192, 132, 252, 0.2), 0 0 120px rgba(244, 114, 182, 0.1);
+  --shadow-soft: 0 0 20px rgba(192, 132, 252, 0.2);
+}
+
+/* Subtle aurora/plasma wash for plasma theme. */
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="plasma"] {
+    background-image:
+      radial-gradient(1000px 500px at 18% 18%, rgba(192, 132, 252, 0.12), transparent 60%),
+      radial-gradient(1100px 600px at 82% 82%, rgba(244, 114, 182, 0.12), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 20s ease-in-out infinite alternate;
+  }
+}
+
 /* Respect OS dark-mode when the user hasn't set a theme yet. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {

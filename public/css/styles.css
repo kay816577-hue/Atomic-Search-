@@ -222,6 +222,18 @@ main {
   align-items: center;
 }
 .search-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-mute); }
+.search-meta .own-idx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  font-weight: 600;
+  font-size: 12px;
+}
 
 /* ---------------- index-counter chip ---------------- */
 .index-chip {
@@ -305,7 +317,25 @@ main {
 .result .badge.atomic {
   color: var(--accent);
   border-color: var(--accent);
-  background: transparent;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.result.atomic-hit {
+  border-left: 3px solid var(--accent);
+  padding-left: 13px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%);
+}
+.result.atomic-hit .host-line::before {
+  content: "From our own index";
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 8px;
 }
 .result .safety-dot {
   width: 8px;

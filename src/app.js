@@ -23,6 +23,7 @@ import { buildAuthRoutes, currentUser } from "./auth.js";
 import { scanDownload, scanBuffer } from "./scan.js";
 import { crawlOne } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
+import { requestSnapshot, forceSnapshot } from "./git_sync.js";
 
 const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
@@ -337,6 +338,21 @@ export function buildApp() {
     return c.json({ ok });
   });
 
+  // Admin: snapshot the index to the GitHub data branch right now. Used
+  // when the operator has just submitted a batch of URLs and wants to
+  // checkpoint the index immediately instead of waiting for the periodic
+  // push. No-ops if GH_INDEX_PAT isn't configured.
+  app.post("/api/admin/push-index", async (c) => {
+    // Prefer the cheap path (re-uses the already-initialised clone).
+    let kicked = await requestSnapshot();
+    if (!kicked) {
+      // Fall back to a full force-push (re-clones the data branch). Slower
+      // but still correct if startIndexSync hasn't run yet.
+      kicked = await forceSnapshot();
+    }
+    return c.json({ ok: kicked });
+  });
+
   app.get("/api/search", async (c) => {
     const qRaw = (c.req.query("q") || "").trim();
     if (!qRaw) return c.json({ query: "", results: [], page: 1, hasMore: false });
@@ -532,6 +548,11 @@ export function buildApp() {
     const url = (body.url || "").trim();
     if (!isSafeUrl(url)) return c.json({ ok: false, error: "Invalid URL" }, 400);
     await addSubmission(url);
+    // Kick an eager crawl so the submitted URL enters the Atomic index on
+    // the next tick, and fire-and-forget a snapshot request so the GitHub
+    // data branch captures it within the normal interval window.
+    crawlOne(url, { timeoutMs: 5000 }).catch(() => {});
+    requestSnapshot().catch(() => {});
     return c.json({ ok: true });
   });
 
