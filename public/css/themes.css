@@ -1,0 +1,797 @@
+/* Theme tokens — toggled via [data-theme="..."] on <body>.
+   Every theme defines the same surface/text/accent variables so styles.css
+   stays theme-agnostic. Tuned for the Google-style clean layout. */
+
+:root,
+[data-theme="atom-dark"] {
+  --bg: #0f1117;
+  --bg-elev: #161a23;
+  --bg-elev-1: #1a1f2b;
+  --bg-elev-2: #1e2330;
+  --text: #e7ecf3;
+  --text-dim: #98a2b3;
+  --text-mute: #6b7280;
+  --accent: #4a90e2;
+  --accent-2: #7ed957;
+  --border: #242a37;
+  --border-soft: #1b2230;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #10b981;
+  --link: #7cc7ff;
+  --link-visited: #c792ea;
+  --ring: rgba(74, 144, 226, 0.45);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="atom-light"] {
+  --bg: #ffffff;
+  --bg-elev: #f7f8fb;
+  --bg-elev-1: #f2f4f8;
+  --bg-elev-2: #eef1f6;
+  --text: #101828;
+  --text-dim: #4b5563;
+  --text-mute: #6b7280;
+  --accent: #1a73e8;
+  --accent-2: #188038;
+  --border: #dfe1e5;
+  --border-soft: #e9ebef;
+  --danger: #d93025;
+  --warn: #f29900;
+  --ok: #188038;
+  --link: #1a0dab;
+  --link-visited: #681da8;
+  --ring: rgba(26, 115, 232, 0.28);
+  --shadow: 0 4px 24px rgba(16, 24, 40, 0.08);
+  --shadow-soft: 0 1px 6px rgba(16, 24, 40, 0.06);
+}
+
+[data-theme="google"] {
+  /* Deliberately Google-like: bright white, light-blue accent, serif logo. */
+  --bg: #ffffff;
+  --bg-elev: #ffffff;
+  --bg-elev-1: #f8f9fa;
+  --bg-elev-2: #f1f3f4;
+  --text: #202124;
+  --text-dim: #4d5156;
+  --text-mute: #70757a;
+  --accent: #1a73e8;
+  --accent-2: #34a853;
+  --border: #dadce0;
+  --border-soft: #e8eaed;
+  --danger: #d93025;
+  --warn: #f9ab00;
+  --ok: #34a853;
+  --link: #1a0dab;
+  --link-visited: #681da8;
+  --ring: rgba(26, 115, 232, 0.28);
+  --shadow: 0 1px 6px rgba(32, 33, 36, 0.12);
+  --shadow-soft: 0 1px 3px rgba(32, 33, 36, 0.1);
+}
+
+[data-theme="midnight"] {
+  --bg: #000814;
+  --bg-elev: #001d3d;
+  --bg-elev-1: #002855;
+  --bg-elev-2: #003566;
+  --text: #ffffff;
+  --text-dim: #a1c4fd;
+  --text-mute: #7fa8d6;
+  --accent: #ffc300;
+  --accent-2: #ffd60a;
+  --border: #003566;
+  --border-soft: #002855;
+  --danger: #ff4d6d;
+  --warn: #ffc300;
+  --ok: #06d6a0;
+  --link: #ffd60a;
+  --link-visited: #fca311;
+  --ring: rgba(255, 195, 0, 0.35);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="neon"] {
+  --bg: #050011;
+  --bg-elev: #0a0120;
+  --bg-elev-1: #0e022a;
+  --bg-elev-2: #120235;
+  --text: #e9f3ff;
+  --text-dim: #9aa4c8;
+  --text-mute: #6c7599;
+  --accent: #00ffe1;
+  --accent-2: #ff4ad6;
+  --border: #231a4a;
+  --border-soft: #1a1238;
+  --danger: #ff5ca8;
+  --warn: #ffd166;
+  --ok: #06d6a0;
+  --link: #7effef;
+  --link-visited: #ff77e9;
+  --ring: rgba(0, 255, 225, 0.45);
+  --shadow: 0 0 40px rgba(255, 74, 214, 0.2);
+  --shadow-soft: 0 0 18px rgba(0, 255, 225, 0.18);
+}
+
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --bg-elev: #343746;
+  --bg-elev-1: #3b3d4d;
+  --bg-elev-2: #44475a;
+  --text: #f8f8f2;
+  --text-dim: #bfbfbf;
+  --text-mute: #858591;
+  --accent: #bd93f9;
+  --accent-2: #50fa7b;
+  --border: #44475a;
+  --border-soft: #3b3d4d;
+  --danger: #ff5555;
+  --warn: #f1fa8c;
+  --ok: #50fa7b;
+  --link: #8be9fd;
+  --link-visited: #ff79c6;
+  --ring: rgba(189, 147, 249, 0.4);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="solar"] {
+  --bg: #fdf6e3;
+  --bg-elev: #fffaef;
+  --bg-elev-1: #f6efdc;
+  --bg-elev-2: #eee8d5;
+  --text: #073642;
+  --text-dim: #657b83;
+  --text-mute: #93a1a1;
+  --accent: #b58900;
+  --accent-2: #859900;
+  --border: #eee8d5;
+  --border-soft: #f2ecd8;
+  --danger: #dc322f;
+  --warn: #cb4b16;
+  --ok: #859900;
+  --link: #268bd2;
+  --link-visited: #6c71c4;
+  --ring: rgba(181, 137, 0, 0.3);
+  --shadow: 0 4px 24px rgba(7, 54, 66, 0.12);
+  --shadow-soft: 0 1px 6px rgba(7, 54, 66, 0.08);
+}
+
+[data-theme="nord"] {
+  --bg: #2e3440;
+  --bg-elev: #3b4252;
+  --bg-elev-1: #434c5e;
+  --bg-elev-2: #4c566a;
+  --text: #eceff4;
+  --text-dim: #d8dee9;
+  --text-mute: #8fa1b3;
+  --accent: #88c0d0;
+  --accent-2: #a3be8c;
+  --border: #434c5e;
+  --border-soft: #3b4252;
+  --danger: #bf616a;
+  --warn: #ebcb8b;
+  --ok: #a3be8c;
+  --link: #81a1c1;
+  --link-visited: #b48ead;
+  --ring: rgba(136, 192, 208, 0.4);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="gruvbox"] {
+  --bg: #282828;
+  --bg-elev: #32302f;
+  --bg-elev-1: #3c3836;
+  --bg-elev-2: #504945;
+  --text: #fbf1c7;
+  --text-dim: #d5c4a1;
+  --text-mute: #928374;
+  --accent: #fabd2f;
+  --accent-2: #b8bb26;
+  --border: #504945;
+  --border-soft: #3c3836;
+  --danger: #fb4934;
+  --warn: #fe8019;
+  --ok: #b8bb26;
+  --link: #83a598;
+  --link-visited: #d3869b;
+  --ring: rgba(250, 189, 47, 0.35);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="sunset"] {
+  --bg: #1a0b2e;
+  --bg-elev: #2d1b47;
+  --bg-elev-1: #3e2654;
+  --bg-elev-2: #4f3167;
+  --text: #fef3e2;
+  --text-dim: #fcd5ce;
+  --text-mute: #e29578;
+  --accent: #ff6b6b;
+  --accent-2: #ffd166;
+  --border: #4f3167;
+  --border-soft: #3e2654;
+  --danger: #ef476f;
+  --warn: #ffd166;
+  --ok: #06d6a0;
+  --link: #ffafcc;
+  --link-visited: #cdb4db;
+  --ring: rgba(255, 107, 107, 0.35);
+  --shadow: 0 10px 40px rgba(26, 11, 46, 0.6);
+  --shadow-soft: 0 2px 12px rgba(26, 11, 46, 0.4);
+}
+
+[data-theme="ocean"] {
+  --bg: #011627;
+  --bg-elev: #0b2942;
+  --bg-elev-1: #13365a;
+  --bg-elev-2: #1b4572;
+  --text: #d6deeb;
+  --text-dim: #a1c4fd;
+  --text-mute: #637777;
+  --accent: #7fdbca;
+  --accent-2: #82aaff;
+  --border: #1b4572;
+  --border-soft: #13365a;
+  --danger: #ef5350;
+  --warn: #ffcb6b;
+  --ok: #c3e88d;
+  --link: #82aaff;
+  --link-visited: #c792ea;
+  --ring: rgba(127, 219, 202, 0.35);
+  --shadow: 0 10px 40px rgba(1, 22, 39, 0.7);
+  --shadow-soft: 0 2px 12px rgba(1, 22, 39, 0.5);
+}
+
+[data-theme="monokai"] {
+  --bg: #272822;
+  --bg-elev: #2f3129;
+  --bg-elev-1: #3b3c35;
+  --bg-elev-2: #49483e;
+  --text: #f8f8f2;
+  --text-dim: #cfcfc2;
+  --text-mute: #75715e;
+  --accent: #a6e22e;
+  --accent-2: #66d9ef;
+  --border: #49483e;
+  --border-soft: #3b3c35;
+  --danger: #f92672;
+  --warn: #fd971f;
+  --ok: #a6e22e;
+  --link: #66d9ef;
+  --link-visited: #ae81ff;
+  --ring: rgba(166, 226, 46, 0.35);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* — Futuristic themes added per request. They lean into neon/glass/grid
+   aesthetics while still using the same token surface so styles.css needs
+   no theme-specific branches. "quantum" is the flagship futuristic look. */
+
+[data-theme="quantum"] {
+  --bg: #05060d;
+  --bg-elev: #0a0c18;
+  --bg-elev-1: #0f1224;
+  --bg-elev-2: #141833;
+  --text: #e6f1ff;
+  --text-dim: #8ba0c7;
+  --text-mute: #5d6a8f;
+  --accent: #00e5ff;
+  --accent-2: #ff4dff;
+  --border: #1a1f45;
+  --border-soft: #10132f;
+  --danger: #ff5c8a;
+  --warn: #ffb86b;
+  --ok: #3dffbb;
+  --link: #7ff1ff;
+  --link-visited: #ff9df0;
+  --ring: rgba(0, 229, 255, 0.55);
+  --shadow: 0 0 60px rgba(0, 229, 255, 0.18), 0 0 120px rgba(255, 77, 255, 0.12);
+  --shadow-soft: 0 0 24px rgba(0, 229, 255, 0.22);
+}
+
+[data-theme="carbon"] {
+  /* Minimal pro monochrome: pure blacks, crisp whites, single cyan accent.
+     Designed to look like a high-end terminal or enterprise dashboard. */
+  --bg: #0a0a0a;
+  --bg-elev: #111111;
+  --bg-elev-1: #171717;
+  --bg-elev-2: #1e1e1e;
+  --text: #f5f5f5;
+  --text-dim: #a3a3a3;
+  --text-mute: #737373;
+  --accent: #0ea5e9;
+  --accent-2: #f5f5f5;
+  --border: #262626;
+  --border-soft: #1c1c1c;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #22c55e;
+  --link: #60a5fa;
+  --link-visited: #d4d4d4;
+  --ring: rgba(14, 165, 233, 0.38);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="matrix"] {
+  --bg: #000800;
+  --bg-elev: #031d05;
+  --bg-elev-1: #052d07;
+  --bg-elev-2: #08400b;
+  --text: #bffcc3;
+  --text-dim: #7bd389;
+  --text-mute: #4a8a55;
+  --accent: #00ff66;
+  --accent-2: #65ffa9;
+  --border: #0a4f10;
+  --border-soft: #063008;
+  --danger: #ff5555;
+  --warn: #ffd866;
+  --ok: #00ff66;
+  --link: #5eff9f;
+  --link-visited: #c1ffc9;
+  --ring: rgba(0, 255, 102, 0.45);
+  --shadow: 0 0 60px rgba(0, 255, 102, 0.18);
+  --shadow-soft: 0 0 16px rgba(0, 255, 102, 0.2);
+}
+
+[data-theme="cyberpunk"] {
+  --bg: #0d0221;
+  --bg-elev: #190634;
+  --bg-elev-1: #240a47;
+  --bg-elev-2: #2e0f5a;
+  --text: #fef9ff;
+  --text-dim: #d5b4ff;
+  --text-mute: #9f79d1;
+  --accent: #ffea00;
+  --accent-2: #ff2a6d;
+  --border: #2e0f5a;
+  --border-soft: #240a47;
+  --danger: #ff2a6d;
+  --warn: #ffea00;
+  --ok: #05d9e8;
+  --link: #05d9e8;
+  --link-visited: #ff2a6d;
+  --ring: rgba(255, 234, 0, 0.45);
+  --shadow: 0 0 50px rgba(255, 42, 109, 0.25), 0 0 100px rgba(5, 217, 232, 0.12);
+  --shadow-soft: 0 0 20px rgba(255, 42, 109, 0.22);
+}
+
+/* ---------- Extra futuristic + mood themes ---------- */
+
+[data-theme="synthwave"] {
+  --bg: #1a0933; --bg-elev: #240a47; --bg-elev-1: #2e0f5a; --bg-elev-2: #3a136b;
+  --text: #fef9ff; --text-dim: #ffb8ff; --text-mute: #a98dd7;
+  --accent: #ff71ce; --accent-2: #01cdfe;
+  --border: #3a136b; --border-soft: #2e0f5a;
+  --danger: #ff3864; --warn: #fffb96; --ok: #05ffa1;
+  --link: #01cdfe; --link-visited: #ff71ce;
+  --ring: rgba(255, 113, 206, 0.5);
+  --shadow: 0 0 60px rgba(255, 113, 206, 0.2), 0 0 120px rgba(1, 205, 254, 0.12);
+  --shadow-soft: 0 0 20px rgba(255, 113, 206, 0.2);
+}
+
+[data-theme="vaporwave"] {
+  --bg: #0f0524; --bg-elev: #1a0d3b; --bg-elev-1: #231354; --bg-elev-2: #2d1a6b;
+  --text: #f5e1ff; --text-dim: #c9a8f0; --text-mute: #8b6dc6;
+  --accent: #ff6ec7; --accent-2: #72d5ff;
+  --border: #2d1a6b; --border-soft: #231354;
+  --danger: #ff5a87; --warn: #ffd3ad; --ok: #81ffd6;
+  --link: #72d5ff; --link-visited: #ff6ec7;
+  --ring: rgba(255, 110, 199, 0.45);
+  --shadow: 0 0 40px rgba(114, 213, 255, 0.18);
+  --shadow-soft: 0 0 18px rgba(255, 110, 199, 0.22);
+}
+
+[data-theme="aurora"] {
+  --bg: #06121e; --bg-elev: #0a1a2c; --bg-elev-1: #0f2538; --bg-elev-2: #142f48;
+  --text: #e4f4ff; --text-dim: #8cc3d9; --text-mute: #5a86a0;
+  --accent: #55ffc1; --accent-2: #7aa7ff;
+  --border: #19354e; --border-soft: #0f2538;
+  --danger: #ff5c7f; --warn: #ffd479; --ok: #55ffc1;
+  --link: #a0f0ff; --link-visited: #c79dff;
+  --ring: rgba(85, 255, 193, 0.4);
+  --shadow: 0 0 80px rgba(85, 255, 193, 0.12), 0 0 140px rgba(122, 167, 255, 0.1);
+  --shadow-soft: 0 0 16px rgba(85, 255, 193, 0.15);
+}
+
+[data-theme="blood-moon"] {
+  --bg: #120405; --bg-elev: #1d0708; --bg-elev-1: #2a0a0c; --bg-elev-2: #3a0e12;
+  --text: #ffe8e8; --text-dim: #d49a9a; --text-mute: #8c6060;
+  --accent: #ff2e2e; --accent-2: #ff8a3c;
+  --border: #4a1014; --border-soft: #340c10;
+  --danger: #ff2e2e; --warn: #ff8a3c; --ok: #ffcf3c;
+  --link: #ff8a8a; --link-visited: #ff6a38;
+  --ring: rgba(255, 46, 46, 0.45);
+  --shadow: 0 0 60px rgba(255, 46, 46, 0.18);
+  --shadow-soft: 0 0 18px rgba(255, 46, 46, 0.22);
+}
+
+[data-theme="forest"] {
+  --bg: #0b1410; --bg-elev: #11201a; --bg-elev-1: #162b22; --bg-elev-2: #1c382c;
+  --text: #e4f4e8; --text-dim: #9bc2a7; --text-mute: #65896f;
+  --accent: #67e08a; --accent-2: #c7b67a;
+  --border: #223a2d; --border-soft: #192d23;
+  --danger: #f06565; --warn: #e8b85a; --ok: #67e08a;
+  --link: #8fefad; --link-visited: #c7b67a;
+  --ring: rgba(103, 224, 138, 0.35);
+  --shadow: 0 6px 32px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="deep-sea"] {
+  --bg: #04121f; --bg-elev: #08192a; --bg-elev-1: #0c2239; --bg-elev-2: #112c4a;
+  --text: #e1f2ff; --text-dim: #8fb8d6; --text-mute: #557b99;
+  --accent: #3fc1ff; --accent-2: #75f4d5;
+  --border: #143654; --border-soft: #0c2239;
+  --danger: #ff6b6b; --warn: #ffcf5a; --ok: #75f4d5;
+  --link: #8ed9ff; --link-visited: #a1e8d5;
+  --ring: rgba(63, 193, 255, 0.4);
+  --shadow: 0 10px 50px rgba(0, 20, 50, 0.6);
+  --shadow-soft: 0 2px 16px rgba(0, 20, 50, 0.4);
+}
+
+[data-theme="pastel"] {
+  --bg: #fef6fb; --bg-elev: #fbeef5; --bg-elev-1: #f6e6ef; --bg-elev-2: #efdbe8;
+  --text: #3a2540; --text-dim: #6b516f; --text-mute: #8e7890;
+  --accent: #ff8fb8; --accent-2: #8fd8ff;
+  --border: #e9cbdd; --border-soft: #f3ddea;
+  --danger: #e86b8a; --warn: #e8b966; --ok: #78c69a;
+  --link: #b85a82; --link-visited: #7a4b92;
+  --ring: rgba(255, 143, 184, 0.32);
+  --shadow: 0 6px 30px rgba(200, 100, 150, 0.12);
+  --shadow-soft: 0 2px 10px rgba(200, 100, 150, 0.08);
+}
+
+[data-theme="terminal-amber"] {
+  --bg: #0a0703; --bg-elev: #120d05; --bg-elev-1: #1a1108; --bg-elev-2: #23170a;
+  --text: #ffb347; --text-dim: #c98a2b; --text-mute: #7a5418;
+  --accent: #ffcf4d; --accent-2: #ff8c1a;
+  --border: #3a2408; --border-soft: #23170a;
+  --danger: #ff5a2a; --warn: #ffcf4d; --ok: #ffb347;
+  --link: #ffd77a; --link-visited: #c98a2b;
+  --ring: rgba(255, 179, 71, 0.4);
+  --shadow: 0 0 40px rgba(255, 179, 71, 0.14);
+  --shadow-soft: 0 0 14px rgba(255, 179, 71, 0.18);
+}
+
+[data-theme="obsidian"] {
+  --bg: #05060a; --bg-elev: #0a0c14; --bg-elev-1: #0f121d; --bg-elev-2: #161a28;
+  --text: #f0f3fa; --text-dim: #9ca7bf; --text-mute: #60697d;
+  --accent: #a78bfa; --accent-2: #34d399;
+  --border: #1f2433; --border-soft: #141824;
+  --danger: #f87171; --warn: #fbbf24; --ok: #34d399;
+  --link: #c4b5fd; --link-visited: #f472b6;
+  --ring: rgba(167, 139, 250, 0.45);
+  --shadow: 0 12px 50px rgba(0, 0, 0, 0.7);
+  --shadow-soft: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+
+/* Animated colour wash for synthwave + vaporwave + aurora — adds depth
+   without committing to a full video background. */
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="synthwave"],
+  body[data-theme="vaporwave"] {
+    background-image:
+      radial-gradient(1200px 600px at 20% 10%, rgba(255, 113, 206, 0.12), transparent 60%),
+      radial-gradient(1000px 500px at 80% 90%, rgba(1, 205, 254, 0.10), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 18s ease-in-out infinite alternate;
+  }
+  body[data-theme="aurora"] {
+    background-image:
+      radial-gradient(900px 500px at 15% 20%, rgba(85, 255, 193, 0.12), transparent 60%),
+      radial-gradient(1100px 600px at 85% 80%, rgba(122, 167, 255, 0.14), transparent 60%),
+      radial-gradient(700px 400px at 50% 50%, rgba(199, 157, 255, 0.08), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 22s ease-in-out infinite alternate;
+  }
+}
+@keyframes atomic-wash {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(25deg); }
+}
+
+/* Quantum-specific flourish: animated grid background behind the home view
+   and results shell so the futuristic theme doesn't just look like a
+   recolour. Pure CSS, GPU-cheap, respects prefers-reduced-motion. */
+body[data-theme="quantum"],
+body[data-theme="cyberpunk"] {
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 77, 255, 0.045) 1px, transparent 1px);
+  background-size: 40px 40px, 40px 40px;
+  background-position: 0 0, 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="quantum"],
+  body[data-theme="cyberpunk"] {
+    animation: atomic-grid-drift 32s linear infinite;
+  }
+}
+@keyframes atomic-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 40px 40px, -40px 40px; }
+}
+
+/* ---------- More themes added per request ---------- */
+
+[data-theme="tokyo-night"] {
+  --bg: #1a1b26; --bg-elev: #1f2335; --bg-elev-1: #24283b; --bg-elev-2: #2b304a;
+  --text: #c0caf5; --text-dim: #9aa5ce; --text-mute: #565f89;
+  --accent: #7aa2f7; --accent-2: #bb9af7;
+  --border: #32374a; --border-soft: #232738;
+  --danger: #f7768e; --warn: #e0af68; --ok: #9ece6a;
+  --link: #7dcfff; --link-visited: #bb9af7;
+  --ring: rgba(122, 162, 247, 0.4);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="catppuccin-mocha"] {
+  --bg: #1e1e2e; --bg-elev: #242438; --bg-elev-1: #2a2a3f; --bg-elev-2: #313147;
+  --text: #cdd6f4; --text-dim: #a6adc8; --text-mute: #6c7086;
+  --accent: #cba6f7; --accent-2: #89b4fa;
+  --border: #45475a; --border-soft: #313244;
+  --danger: #f38ba8; --warn: #f9e2af; --ok: #a6e3a1;
+  --link: #89dceb; --link-visited: #f5c2e7;
+  --ring: rgba(203, 166, 247, 0.42);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5; --bg-elev: #e6e9ef; --bg-elev-1: #dce0e8; --bg-elev-2: #ccd0da;
+  --text: #4c4f69; --text-dim: #5c5f77; --text-mute: #7c7f93;
+  --accent: #8839ef; --accent-2: #1e66f5;
+  --border: #bcc0cc; --border-soft: #ccd0da;
+  --danger: #d20f39; --warn: #df8e1d; --ok: #40a02b;
+  --link: #1e66f5; --link-visited: #8839ef;
+  --ring: rgba(136, 57, 239, 0.28);
+  --shadow: 0 4px 24px rgba(76, 79, 105, 0.1);
+  --shadow-soft: 0 1px 6px rgba(76, 79, 105, 0.08);
+}
+
+[data-theme="rose-pine"] {
+  --bg: #191724; --bg-elev: #1f1d2e; --bg-elev-1: #26233a; --bg-elev-2: #2d2a44;
+  --text: #e0def4; --text-dim: #c4c1e0; --text-mute: #908caa;
+  --accent: #eb6f92; --accent-2: #f6c177;
+  --border: #403d59; --border-soft: #2d2a44;
+  --danger: #eb6f92; --warn: #f6c177; --ok: #9ccfd8;
+  --link: #c4a7e7; --link-visited: #ebbcba;
+  --ring: rgba(235, 111, 146, 0.4);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="arctic"] {
+  --bg: #e9f1f9; --bg-elev: #d8e4f1; --bg-elev-1: #c5d6e9; --bg-elev-2: #b3c7de;
+  --text: #1b2e44; --text-dim: #3e5671; --text-mute: #6b8099;
+  --accent: #0ea5e9; --accent-2: #3b82f6;
+  --border: #aec1d8; --border-soft: #c5d6e9;
+  --danger: #e11d48; --warn: #d97706; --ok: #059669;
+  --link: #0369a1; --link-visited: #7e22ce;
+  --ring: rgba(14, 165, 233, 0.3);
+  --shadow: 0 4px 24px rgba(27, 46, 68, 0.1);
+  --shadow-soft: 0 1px 6px rgba(27, 46, 68, 0.08);
+}
+
+[data-theme="amoled"] {
+  /* True-black OLED-friendly. Full black bg saves phone battery; accent
+     stays pop-y so the UI doesn't look flat. */
+  --bg: #000000; --bg-elev: #0a0a0a; --bg-elev-1: #131313; --bg-elev-2: #1c1c1c;
+  --text: #f1f1f1; --text-dim: #a0a0a0; --text-mute: #6a6a6a;
+  --accent: #ff3b30; --accent-2: #30d158;
+  --border: #1f1f1f; --border-soft: #141414;
+  --danger: #ff453a; --warn: #ffd60a; --ok: #30d158;
+  --link: #ff6b61; --link-visited: #d6a6ff;
+  --ring: rgba(255, 59, 48, 0.4);
+  --shadow: 0 10px 50px rgba(0, 0, 0, 0.9);
+  --shadow-soft: 0 2px 14px rgba(0, 0, 0, 0.7);
+}
+
+[data-theme="hacker"] {
+  /* Terminal-green-on-black with scanline vibes. Matrix's cousin — more
+     muted, easier to read for long sessions. */
+  --bg: #0c0f0a; --bg-elev: #0f140c; --bg-elev-1: #131a0f; --bg-elev-2: #1a2314;
+  --text: #d6f5c6; --text-dim: #8ec077; --text-mute: #55793f;
+  --accent: #7fff4e; --accent-2: #c5ff8e;
+  --border: #1f2e17; --border-soft: #16200f;
+  --danger: #ff6b6b; --warn: #ffd166; --ok: #7fff4e;
+  --link: #9eff78; --link-visited: #c5ff8e;
+  --ring: rgba(127, 255, 78, 0.4);
+  --shadow: 0 0 40px rgba(127, 255, 78, 0.12);
+  --shadow-soft: 0 0 14px rgba(127, 255, 78, 0.18);
+}
+
+[data-theme="sunrise"] {
+  --bg: #fff7ed; --bg-elev: #ffedd5; --bg-elev-1: #fed7aa; --bg-elev-2: #fdba74;
+  --text: #3b2513; --text-dim: #7c4a21; --text-mute: #a67c52;
+  --accent: #ea580c; --accent-2: #f59e0b;
+  --border: #fdba74; --border-soft: #fed7aa;
+  --danger: #dc2626; --warn: #b45309; --ok: #15803d;
+  --link: #c2410c; --link-visited: #a16207;
+  --ring: rgba(234, 88, 12, 0.28);
+  --shadow: 0 6px 28px rgba(194, 65, 12, 0.15);
+  --shadow-soft: 0 2px 10px rgba(194, 65, 12, 0.1);
+}
+
+[data-theme="plasma"] {
+  --bg: #090118; --bg-elev: #130228; --bg-elev-1: #1d0438; --bg-elev-2: #29074d;
+  --text: #f5ecff; --text-dim: #d4b9ff; --text-mute: #9574cc;
+  --accent: #c084fc; --accent-2: #f472b6;
+  --border: #3b0d6b; --border-soft: #29074d;
+  --danger: #f43f5e; --warn: #facc15; --ok: #4ade80;
+  --link: #e9d5ff; --link-visited: #fbcfe8;
+  --ring: rgba(192, 132, 252, 0.45);
+  --shadow: 0 0 60px rgba(192, 132, 252, 0.2), 0 0 120px rgba(244, 114, 182, 0.1);
+  --shadow-soft: 0 0 20px rgba(192, 132, 252, 0.2);
+}
+
+/* Subtle aurora/plasma wash for plasma theme. */
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="plasma"] {
+    background-image:
+      radial-gradient(1000px 500px at 18% 18%, rgba(192, 132, 252, 0.12), transparent 60%),
+      radial-gradient(1100px 600px at 82% 82%, rgba(244, 114, 182, 0.12), transparent 60%);
+    background-attachment: fixed;
+    animation: atomic-wash 20s ease-in-out infinite alternate;
+  }
+}
+
+/* =======================================================================
+   v2 additions — UCX, Paper, Mint, Lavender, High-Contrast, Retro-CRT
+   ======================================================================= */
+
+[data-theme="ucx"] {
+  --bg: #0b0d12;
+  --bg-elev: #13161f;
+  --bg-elev-1: #191d28;
+  --bg-elev-2: #1f2432;
+  --text: #f4f6fb;
+  --text-dim: #a9b2c3;
+  --text-mute: #6c7689;
+  --accent: #e23a3a;
+  --accent-2: #ff8a3d;
+  --border: #262b3a;
+  --border-soft: #1c2130;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --ok: #10b981;
+  --link: #ff8a8a;
+  --link-visited: #d0a7ff;
+  --ring: rgba(226, 58, 58, 0.5);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="paper"] {
+  --bg: #f6f1e7;
+  --bg-elev: #fbf6ec;
+  --bg-elev-1: #f1ecde;
+  --bg-elev-2: #e9e3d2;
+  --text: #2c2a24;
+  --text-dim: #6a665a;
+  --text-mute: #918c7e;
+  --accent: #a0522d;
+  --accent-2: #3e8948;
+  --border: #d9d3c1;
+  --border-soft: #e8e3d3;
+  --danger: #c0392b;
+  --warn: #b7791f;
+  --ok: #2f855a;
+  --link: #8b4513;
+  --link-visited: #805ad5;
+  --ring: rgba(160, 82, 45, 0.35);
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="mint"] {
+  --bg: #f0fbf6;
+  --bg-elev: #ffffff;
+  --bg-elev-1: #e6f5ec;
+  --bg-elev-2: #d9efe3;
+  --text: #0f3b2a;
+  --text-dim: #3f6756;
+  --text-mute: #6d8a7c;
+  --accent: #0fae68;
+  --accent-2: #14b8a6;
+  --border: #c6e6d4;
+  --border-soft: #def1e5;
+  --danger: #dc2626;
+  --warn: #d97706;
+  --ok: #059669;
+  --link: #0d9488;
+  --link-visited: #7c3aed;
+  --ring: rgba(15, 174, 104, 0.35);
+  --shadow: 0 6px 24px rgba(15, 174, 104, 0.1);
+}
+
+[data-theme="lavender"] {
+  --bg: #f6f3fb;
+  --bg-elev: #fffcff;
+  --bg-elev-1: #ebe6f6;
+  --bg-elev-2: #ddd6ef;
+  --text: #2b1a4a;
+  --text-dim: #5a4a7a;
+  --text-mute: #8378a1;
+  --accent: #8b5cf6;
+  --accent-2: #ec4899;
+  --border: #d0c5ea;
+  --border-soft: #e3dcf3;
+  --danger: #db2777;
+  --warn: #d97706;
+  --ok: #059669;
+  --link: #7c3aed;
+  --link-visited: #2563eb;
+  --ring: rgba(139, 92, 246, 0.4);
+  --shadow: 0 6px 24px rgba(139, 92, 246, 0.12);
+}
+
+[data-theme="high-contrast"] {
+  --bg: #000000;
+  --bg-elev: #000000;
+  --bg-elev-1: #0a0a0a;
+  --bg-elev-2: #101010;
+  --text: #ffffff;
+  --text-dim: #ffff80;
+  --text-mute: #c0c0c0;
+  --accent: #ffff00;
+  --accent-2: #00ffff;
+  --border: #ffffff;
+  --border-soft: #888888;
+  --danger: #ff0040;
+  --warn: #ffaa00;
+  --ok: #00ff66;
+  --link: #66ffff;
+  --link-visited: #ff66ff;
+  --ring: rgba(255, 255, 0, 0.8);
+  --shadow: 0 0 0 2px #ffff00;
+}
+
+[data-theme="retro-crt"] {
+  --bg: #020c04;
+  --bg-elev: #031108;
+  --bg-elev-1: #05180c;
+  --bg-elev-2: #072110;
+  --text: #62ff8b;
+  --text-dim: #3cc26a;
+  --text-mute: #2a7a47;
+  --accent: #00ff66;
+  --accent-2: #7cff9c;
+  --border: #0d3a1e;
+  --border-soft: #0a2a16;
+  --danger: #ff5b5b;
+  --warn: #f4d35e;
+  --ok: #00ff66;
+  --link: #b7ffcc;
+  --link-visited: #f4d35e;
+  --ring: rgba(0, 255, 102, 0.45);
+  --shadow: 0 0 28px rgba(0, 255, 102, 0.25);
+}
+[data-theme="retro-crt"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 255, 102, 0.035),
+    rgba(0, 255, 102, 0.035) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: overlay;
+  z-index: 9999;
+}
+
+/* Respect OS dark-mode when the user hasn't set a theme yet. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+  }
+}

@@ -1,15 +1,28 @@
 {
-  "name": "werender-search-hybrid",
-  "version": "1.0.0",
+  "name": "atomic-search",
+  "version": "2.0.0",
+  "description": "Atomic Search — privacy-first search with its own growing anonymous index. No trackers, no logs, no history.",
+  "private": true,
+  "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "echo 'nothing to build — static frontend is in ./public'",
+    "wrangler:dev": "wrangler pages dev ./public --compatibility-date=2024-09-01",
+    "wrangler:deploy": "wrangler pages deploy ./public"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0",
-    "node-fetch": "^3.3.2",
-    "cors": "^2.8.5"
-  }
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.12",
+    "linkedom": "^0.18.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.5.0",
+    "nodemailer": "^6.9.16"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
 }

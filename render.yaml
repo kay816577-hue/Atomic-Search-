@@ -1,0 +1,70 @@
+services:
+  - type: web
+    name: atomic-search
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+
+      # --- Persistent index (Render free tier has no persistent disk; we
+      # snapshot SQLite to a data branch of the GitHub repo instead). The PAT
+      # needs `contents:write` on this repo only. If unset, the crawler still
+      # runs but its index resets on each deploy.
+      - key: GH_INDEX_PAT
+        sync: false
+      - key: GH_INDEX_REPO
+        value: kay816577-hue/Atomic-Search-
+      - key: GH_INDEX_BRANCH
+        value: atomic-search-index
+      - key: GH_INDEX_INTERVAL
+        value: "120"
+
+      # --- URL + download safety checks (VirusTotal). Free key at
+      # https://www.virustotal.com/gui/my-apikey — 500 req/day.
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+
+      # --- Optional: Google OAuth sign-in. Get a client at
+      # https://console.cloud.google.com/apis/credentials. Redirect URI must
+      # be https://<your-render-domain>/api/auth/google/callback
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      # --- Optional: SMTP for email sign-in / confirmation messages. Any SMTP
+      # provider works (Resend, SendGrid, Postmark, Gmail SMTP, …).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        value: "Atomic Search <noreply@atomicsearch.local>"
+
+      # --- Optional: session-cookie signing secret. If unset we derive a
+      # best-effort one from the PAT/VT key so sessions still survive
+      # restarts, but you should set this to a long random string in prod.
+      - key: ATOMIC_SESSION_SECRET
+        sync: false
+
+      # --- Optional: AI backends (opt-in per user). If neither is set the
+      # extractive fallback still works with zero config.
+      - key: HF_API_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_API_BASE
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
