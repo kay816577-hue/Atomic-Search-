@@ -1107,6 +1107,53 @@ body[data-theme="high-contrast"][data-view="home"]::before {
 }
 .answer-box .answer-link:hover { text-decoration: underline; }
 
+/* ---------------- Per-result rich preview ---------------- */
+.result .result-preview {
+  margin: 8px 0 2px;
+  padding: 10px 12px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "source source"
+    "thumb  text";
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: start;
+}
+.result .result-preview .preview-source {
+  grid-area: source;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.result .result-preview .preview-thumb {
+  grid-area: thumb;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.result .result-preview .preview-text {
+  grid-area: text;
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.result .result-preview:not(:has(.preview-thumb)) {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "source"
+    "text";
+}
+
 /* ---------------- Why this result panel ---------------- */
 .result .why-toggle {
   margin-left: 4px;

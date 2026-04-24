@@ -181,19 +181,29 @@ async function buildOwnResults(q) {
         .split(/\s+/)
         .filter((t) => t.length >= 2)
         .every((t) => (p.title || "").toLowerCase().includes(t));
+    const snippet = (p.text || "").slice(0, 240);
     return {
       url: p.url,
       host: p.host,
       title: p.title,
       text: p.text,
-      snippet: (p.text || "").slice(0, 240),
+      snippet,
       engine: "atomic-index",
       engines: ["atomic-index"],
       score,
       titleHit,
       ownIndex: true,
-      // Minimal "why this result" signal so the UI can explain own-index
-      // rows that skip the meta fuser (ownFused / ownTailPool paths).
+      // Per-signal diagnostics so the UI "Why this result?" panel has the
+      // same shape as meta-fused results. Values are normalised 0..1 the
+      // same way ranking.js produces them.
+      subScores: {
+        bm25: titleHit ? 0.9 : 0.3,
+        titleMatch: titleHit ? 1.0 : 0.2,
+        agreement: 0,
+        authority: 0,
+        rrf: 0,
+        structure: 0,
+      },
       signals: {
         agreement: 1,
         popularHostTier: 0,
@@ -203,6 +213,16 @@ async function buildOwnResults(q) {
         homepage: false,
         keywordCoverage: titleHit ? 1 : 0,
       },
+      // Rich preview block — same shape as aggregator.enrichPreviews
+      // produces, so the frontend can render every result uniformly.
+      preview: snippet
+        ? {
+            source: "Atomic index",
+            title: p.title,
+            text: snippet.length > 360 ? snippet.slice(0, 360).trimEnd() + "…" : snippet,
+            thumbnail: null,
+          }
+        : null,
     };
   });
 }

@@ -6,6 +6,18 @@
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
 import { isNsfwResult, isNsfwText } from "./nsfw.js";
+import {
+  WEIGHTS,
+  buildQueryContext,
+  bm25Score,
+  titleMatchScore,
+  authorityScore,
+  structureScore,
+  agreementScore,
+  rrfNormalised,
+  combineScore,
+  stripTitleBrand,
+} from "./ranking.js";
 
 // Internal engine ids are used only for RRF / debugging. They are never
 // leaked to the client (the /api/search response reports results as sourced
@@ -106,6 +118,103 @@ const POPULAR_HOSTS = {
   "youtube.com": 1,
 };
 
+// Small LRU for Wikipedia REST-summary responses so hot queries don't
+// re-fetch the same articles. Keyed by canonical slug. Capped at 500
+// entries (≈ few MB); older keys evicted on overflow.
+const WIKI_PREVIEW_CACHE = new Map();
+const WIKI_PREVIEW_CAP = 500;
+function wikiCacheGet(key) {
+  if (!WIKI_PREVIEW_CACHE.has(key)) return null;
+  const v = WIKI_PREVIEW_CACHE.get(key);
+  WIKI_PREVIEW_CACHE.delete(key);
+  WIKI_PREVIEW_CACHE.set(key, v);
+  return v;
+}
+function wikiCacheSet(key, val) {
+  if (WIKI_PREVIEW_CACHE.size >= WIKI_PREVIEW_CAP) {
+    const oldest = WIKI_PREVIEW_CACHE.keys().next().value;
+    if (oldest !== undefined) WIKI_PREVIEW_CACHE.delete(oldest);
+  }
+  WIKI_PREVIEW_CACHE.set(key, val);
+}
+
+// Attach `preview = { source, text, thumbnail, title }` to every result.
+// Wikipedia previews come from the REST summary API (anonymous, keyless).
+// All fetches share a global budget so a slow Wikipedia doesn't delay the
+// whole page — we simply keep whatever completed.
+async function enrichPreviews(results) {
+  if (!Array.isArray(results) || !results.length) return;
+
+  // Seed non-wiki previews immediately from the existing snippet so even if
+  // the wiki batch times out, every card already has a usable preview.
+  for (const r of results) {
+    if (!r.snippet) continue;
+    r.preview = {
+      source: r.ownIndex ? "Atomic index" : "Web snippet",
+      title: r.title,
+      text: r.snippet.length > 360 ? r.snippet.slice(0, 360).trimEnd() + "…" : r.snippet,
+      thumbnail: null,
+    };
+  }
+
+  // Collect wiki targets.
+  const wikiTargets = [];
+  for (const r of results) {
+    if (!/en\.wikipedia\.org\/wiki\//.test(r.url || "")) continue;
+    const slug = decodeURIComponent((r.url.split("/wiki/")[1] || "")).split("#")[0].split("?")[0];
+    if (!slug) continue;
+    wikiTargets.push({ r, slug });
+  }
+  if (!wikiTargets.length) return;
+
+  // Fetch summaries in parallel, with a shared ~6s cap on the whole batch.
+  // Cache hits resolve instantly.
+  const BUDGET_MS = 6000;
+  const PER_REQ_MS = 3500;
+  const started = Date.now();
+
+  await Promise.race([
+    Promise.allSettled(
+      wikiTargets.map(async ({ r, slug }) => {
+        const cached = wikiCacheGet(slug);
+        if (cached) { applyWikiPreview(r, cached); return; }
+        if (Date.now() - started > BUDGET_MS) return;
+        try {
+          const res = await privateFetch(
+            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`,
+            { timeout: PER_REQ_MS, headers: { Accept: "application/json" } }
+          );
+          if (!res.ok) return;
+          const j = await res.json();
+          if (!j?.extract || isNsfwText(j.extract)) return;
+          const payload = {
+            title: j.title || null,
+            text: j.extract.slice(0, 600),
+            thumbnail: j.thumbnail?.source || null,
+          };
+          wikiCacheSet(slug, payload);
+          applyWikiPreview(r, payload);
+        } catch { /* tolerate individual failures */ }
+      })
+    ),
+    new Promise((resolve) => setTimeout(resolve, BUDGET_MS)),
+  ]);
+}
+
+function applyWikiPreview(r, p) {
+  r.preview = {
+    source: "Wikipedia",
+    title: p.title,
+    text: p.text,
+    thumbnail: p.thumbnail,
+  };
+}
+
+function round3(x) {
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 1000) / 1000;
+}
+
 function popularHostBoost(url) {
   try {
     const h = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
@@ -119,139 +228,61 @@ function popularHostBoost(url) {
   return 0;
 }
 
-// Simple keyword-relevance score for an item. Not an embedding — we don't
-// want to drag a 400MB model onto Render's free tier — but good enough to
-// push results whose title+snippet actually cover the query tokens above
-// results that just happen to share a word. Returns a 0..~2 scalar.
-const QRY_STOPWORDS = new Set([
-  "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
-  "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
-  "from", "what", "who", "why", "how", "do", "does", "did",
-]);
-// Suffixes sites commonly append to titles that we strip before doing
-// exact-match checks. "Linux kernel - Wikipedia" should be treated as an
-// exact match for the query "linux kernel".
-const TITLE_SUFFIX_RE = /\s*[|\-–—·:]\s*(wikipedia(?:,\s*the\s*free\s*encyclopedia)?|wiki|mdn\s*web\s*docs|mdn|github|docs|documentation|official\s*site|home\s*page|home|blog)\s*$/i;
-function stripTitleBrand(t) {
-  return (t || "").replace(TITLE_SUFFIX_RE, "").trim();
-}
-function keywordRelevance(item, tokens) {
-  if (!tokens || !tokens.length) return 0;
-  const rawTitle = (item.title || "").toLowerCase();
-  const title = stripTitleBrand(rawTitle).toLowerCase();
-  const snip = (item.snippet || "").toLowerCase();
-  const hay = title + " " + snip;
-  let titleHits = 0;
-  let hayHits = 0;
-  for (const t of tokens) {
-    if (title.includes(t)) titleHits += 1;
-    if (hay.includes(t)) hayHits += 1;
-  }
-  const titleCov = titleHits / tokens.length;
-  const hayCov = hayHits / tokens.length;
-  // Title coverage dominates (fraction of tokens present in title), with a
-  // bonus for whole-query phrase match in the title.
-  let r = titleCov * 0.7 + hayCov * 0.3;
-  const phrase = tokens.join(" ");
-  if (phrase.length >= 4 && title.includes(phrase)) r += 0.2;
-  // Strong exact-title match: the stripped title is exactly the query (or
-  // a very close subset). "Linux kernel" query → title "Linux kernel" wins
-  // over "Linux kernel version history". This is what makes the canonical
-  // page outrank tangential ones.
-  if (title === phrase) r += 0.8;
-  else if (title.startsWith(phrase + " ") || title.startsWith(phrase + ":")) r += 0.4;
-  else if (title.endsWith(" " + phrase)) r += 0.2;
-  // Shortness preference: among results that all cover the query, shorter
-  // titles tend to be more on-topic. Compare word-count of title vs tokens.
-  if (titleCov === 1 && phrase.length >= 3) {
-    const titleWords = title.split(/\s+/).filter(Boolean).length;
-    const extra = Math.max(0, titleWords - tokens.length);
-    // ~+0.25 when title is exactly the query, decaying as noise is added.
-    r += 0.25 / (1 + extra * 0.5);
-  }
-  return Math.min(2.5, r);
-}
-
-// Give the root page of a site an extra nudge when the query matches the
-// host. `kernel.org/` for "linux kernel" should beat a deep article on
-// wiki that also matches. Only fires when the user's query actually
-// mentions the domain's distinctive word.
-function homepageBoost(url, tokens) {
-  if (!tokens || tokens.length === 0) return 0;
-  try {
-    const u = new URL(url);
-    const path = u.pathname.replace(/\/+$/, "");
-    if (path !== "" && path !== "/") return 0;
-    if (u.search) return 0;
-    const host = u.hostname.replace(/^www\./, "").toLowerCase();
-    // Use the registered-domain root word (kernel.org → "kernel").
-    const rootWord = host.split(".").slice(-2)[0] || host;
-    for (const t of tokens) {
-      if (t.length >= 3 && (rootWord === t || host.split(".").includes(t))) {
-        return 1; // single flat tier — ranker multiplies this.
-      }
-    }
-  } catch { /* ignore */ }
-  return 0;
-}
-
-// Reciprocal Rank Fusion with a cross-source agreement boost + popular-site
-// prior + keyword relevance weighting. When the exact same URL shows up in
-// N different engines, that's a very strong signal — we multiply the RRF
-// score so cross-confirmed pages float to the top. A matching popular host
-// adds a small flat bonus, and a keyword-relevant title nudges the score
-// up further so "matching keyword on a popular site" surfaces correctly.
+// Fuse N ranked lists into one scored list using the ranking module.
+//
+// Every result's final `score` is a single weighted sum of named, bounded
+// sub-scores (see src/ranking.js for the formulae). Each sub-score is
+// unit-tested. Changing the mix is a one-line edit to WEIGHTS.
+//
+// Inputs:
+//   lists  : Array<Array<{ url, title, snippet, engine?, ownIndex? }>>
+//   query  : user query string
+// Output:
+//   Array<{ ...item, score, subScores, agreement, popTier, engines }>
+//   sorted by score descending.
 function rankBlend(lists, query = "") {
-  const k = 60;
-  const scores = new Map();
-  const sources = new Map(); // url -> Set<engine>
+  const ctx = buildQueryContext(query);
+
+  // Pass 1: accumulate raw RRF + source set + first-seen item per URL.
+  const K_RRF = 60;
+  const rrfRaw = new Map();
+  const sources = new Map();
   const items = new Map();
   for (const list of lists) {
     list.forEach((item, idx) => {
       const key = normaliseUrl(item.url);
       if (!key) return;
-      const prev = scores.get(key) || 0;
-      scores.set(key, prev + 1 / (k + idx + 1));
+      rrfRaw.set(key, (rrfRaw.get(key) || 0) + 1 / (K_RRF + idx + 1));
       const set = sources.get(key) || new Set();
       if (item.engine) set.add(item.engine);
       sources.set(key, set);
       if (!items.has(key)) items.set(key, { ...item, url: key });
     });
   }
-  const qTokens = (query || "")
-    .toLowerCase()
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2 && !QRY_STOPWORDS.has(t));
+  const rrfMax = Math.max(0, ...rrfRaw.values());
+
+  // Pass 2: compute sub-scores + combined score for each unique item.
   const merged = [...items.values()].map((it) => {
-    const baseline = scores.get(it.url) || 0;
     const srcs = sources.get(it.url) || new Set();
-    // 1 source: x1.0 (no boost), 2: x1.4, 3: x1.7, 4+: x1.9 — capped so
-    // one widely-shared link can't bury a very strong but single-source hit.
-    const agree = srcs.size;
-    const agreeBoost = agree <= 1 ? 1 : Math.min(1.9, 1 + Math.log2(agree) * 0.6);
     const popTier = popularHostBoost(it.url);
-    // Popular-host bonus is small (fractional) and additive on the RRF
-    // baseline BEFORE the agreement multiplier, so it layers cleanly.
-    const popBonus = popTier * 0.015;
-    // Homepage of a host that matches the query gets a flat additive nudge
-    // big enough to push kernel.org/ above kernel.org/docs/… when the
-    // query is just "linux kernel".
-    const homeBonus = homepageBoost(it.url, qTokens) * 0.04;
-    // Keyword relevance multiplier: 0.6x at no coverage, up to ~2.1x for a
-    // short exact-title match. The wider spread (vs the previous 0.8..1.5
-    // band) is what actually lets title-matching beat cross-source agreement
-    // on canonical-page queries.
-    const kw = keywordRelevance(it, qTokens);
-    const kwMult = 0.6 + kw * 0.9;
+    const subScores = {
+      bm25: bm25Score(it, ctx),
+      titleMatch: titleMatchScore(it, ctx),
+      agreement: agreementScore(srcs.size),
+      authority: authorityScore(popTier),
+      rrf: rrfNormalised(rrfRaw.get(it.url) || 0, rrfMax),
+      structure: structureScore(it.url, ctx),
+    };
     return {
       ...it,
-      score: (baseline + popBonus + homeBonus) * agreeBoost * kwMult,
+      score: combineScore(subScores),
+      subScores,
       engines: Array.from(srcs),
-      agreement: agree,
+      agreement: srcs.size,
       popTier,
     };
   });
+
   merged.sort((a, b) => b.score - a.score);
   return merged;
 }
@@ -748,33 +779,28 @@ export async function metaSearch(q, opts = {}) {
   for (const extra of extraLists) {
     for (const r of extra) if (r?.url) ownUrls.add(normaliseUrl(r.url));
   }
-  // Tokens used for relevance filter + "why this result" signal building.
-  const relevanceStopwords = new Set([
-    "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
-    "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
-    "from", "what", "who", "why", "how", "do", "does", "did",
-  ]);
-  const qAllTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
-  const qTokens = qAllTokens.filter((t) => !relevanceStopwords.has(t));
-  const effTokens = qTokens.length ? qTokens : qAllTokens;
-  // Build the "why this result" signals so the UI can show the user what
-  // actually contributed to a result's position. We never leak upstream
-  // engine names — everything here is either generic ("X engines agreed")
-  // or an Atomic-internal signal (ownIndex, popularHost, titleMatch).
+  const ctx = buildQueryContext(query);
+  const qTokens = ctx.tokens;
+  const effTokens = qTokens;
+  const phrase = ctx.phrase;
+  // Each result carries:
+  //   - `score`         : combined score (0..1), monotone in quality
+  //   - `subScores`     : per-signal 0..1 components, for diagnostics
+  //   - `signals`       : human-friendly flags derived from subScores
+  //                       (same information, easier for the UI to render)
   merged = uniqBy(merged, (r) => r.url).map((r) => {
     const titleLc = stripTitleBrand((r.title || "").toLowerCase());
-    const phrase = qTokens.join(" ");
-    const kwCov = qTokens.length
-      ? qTokens.reduce((n, t) => n + (titleLc.includes(t) ? 1 : 0), 0) / qTokens.length
-      : 0;
+    const sub = r.subScores || {};
     const signals = {
       agreement: r.agreement || 1,
       popularHostTier: r.popTier || 0,
       ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
       titleExact: phrase.length >= 3 && titleLc === phrase,
       titlePrefix: phrase.length >= 3 && (titleLc.startsWith(phrase + " ") || titleLc.startsWith(phrase + ":")),
-      homepage: homepageBoost(r.url, qTokens) > 0,
-      keywordCoverage: Math.round(kwCov * 100) / 100,
+      homepage: (sub.structure || 0) >= 1,
+      keywordCoverage: qTokens.length
+        ? Math.round((qTokens.reduce((n, t) => n + (titleLc.includes(t) ? 1 : 0), 0) / qTokens.length) * 100) / 100
+        : 0,
     };
     return {
       url: r.url,
@@ -785,6 +811,14 @@ export async function metaSearch(q, opts = {}) {
       engines: ["atomic"],
       ownIndex: signals.ownIndex,
       score: Math.round(r.score * 1000) / 1000,
+      subScores: {
+        bm25: round3(sub.bm25),
+        titleMatch: round3(sub.titleMatch),
+        agreement: round3(sub.agreement),
+        authority: round3(sub.authority),
+        rrf: round3(sub.rrf),
+        structure: round3(sub.structure),
+      },
       signals,
     };
   });
@@ -824,7 +858,7 @@ export async function metaSearch(q, opts = {}) {
       .filter(({ r }) => {
         if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
         const t = (r.title || "").toLowerCase();
-        return qAllTokens.every((tok) => t.includes(tok));
+        return qTokens.every((tok) => t.includes(tok));
       })
       .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
@@ -858,49 +892,38 @@ export async function metaSearch(q, opts = {}) {
   const hasMore = merged.length > perPage;
   const results = merged.slice(0, perPage);
 
-  // Instant-answer box (top-of-page). Only on page 1. Best-effort: we look
-  // for a Wikipedia match and fetch its summary via the public REST extract
-  // API (anonymous, no key). If Wikipedia has no extract, we fall back to
-  // the best on-topic snippet from the top results.
+  // Enrich every result with a `preview` block. For Wikipedia hits we
+  // fetch the REST summary (parallel, shared 6s budget, LRU cached). For
+  // non-wiki results we synthesise from the snippet we already have.
+  await enrichPreviews(results);
+
+  // Instant-answer box (page 1 only). Prefer the first Wikipedia hit's
+  // preview; fall back to the strongest on-topic snippet otherwise.
   let instant = null;
   if (page === 1 && results.length) {
-    try {
-      const wiki = results.find((r) => /en\.wikipedia\.org\/wiki\//.test(r.url));
-      if (wiki) {
-        const slug = decodeURIComponent(wiki.url.split("/wiki/")[1] || "").split("#")[0];
-        if (slug) {
-          const res = await privateFetch(
-            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`,
-            { timeout: 4000, headers: { Accept: "application/json" } }
-          );
-          if (res.ok) {
-            const j = await res.json();
-            if (j?.extract && !isNsfwText(j.extract)) {
-              instant = {
-                source: "Wikipedia",
-                title: j.title || wiki.title,
-                text: j.extract.slice(0, 600),
-                url: wiki.url,
-                thumbnail: j.thumbnail?.source || null,
-              };
-            }
-          }
-        }
+    const wiki = results.find(
+      (r) => r.preview && r.preview.source === "Wikipedia"
+    );
+    if (wiki) {
+      instant = {
+        source: "Wikipedia",
+        title: wiki.preview.title || wiki.title,
+        text: wiki.preview.text,
+        url: wiki.url,
+        thumbnail: wiki.preview.thumbnail || null,
+      };
+    } else {
+      const cand = results.find((r) => r.snippet && r.snippet.length > 80);
+      if (cand) {
+        instant = {
+          source: cand.ownIndex ? "Atomic index" : "Top result",
+          title: cand.title,
+          text: cand.snippet.slice(0, 400),
+          url: cand.url,
+          thumbnail: null,
+        };
       }
-      if (!instant) {
-        // Fallback: synthesise from the strongest on-topic snippet.
-        const cand = results.find((r) => r.snippet && r.snippet.length > 80);
-        if (cand) {
-          instant = {
-            source: cand.ownIndex ? "Atomic index" : "Top result",
-            title: cand.title,
-            text: cand.snippet.slice(0, 400),
-            url: cand.url,
-            thumbnail: null,
-          };
-        }
-      }
-    } catch { /* instant answer is best-effort, never fatal */ }
+    }
   }
 
   return {
