@@ -537,6 +537,27 @@
     );
   }
 
+  function renderPreview(r, terms) {
+    var p = r.preview;
+    if (!p || !p.text) return "";
+    var thumb = p.thumbnail
+      ? '<img class="preview-thumb" src="' + esc(p.thumbnail) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
+      : "";
+    var textHtml = highlight(p.text, terms);
+    var sourceLabel = p.source === "Wikipedia"
+      ? "Wikipedia summary"
+      : p.source === "Atomic index"
+        ? "From our own index"
+        : "Snippet";
+    return (
+      '<div class="result-preview" data-source="' + esc(p.source) + '">' +
+      '  <span class="preview-source">' + esc(sourceLabel) + "</span>" +
+      "  " + thumb +
+      '  <p class="preview-text">' + textHtml + "</p>" +
+      "</div>"
+    );
+  }
+
   function renderResult(r, i, terms) {
     var host = r.host || hostOf(r.url);
     var pathLabel = pathOf(r.url);
@@ -547,7 +568,9 @@
       badges.push('<span class="badge agree" title="Confirmed by ' + r.agreement + ' sources">' + r.agreement + ' sources</span>');
     }
     var titleHtml = highlight(r.title || r.url, terms);
-    var snippetHtml = r.snippet ? highlight(r.snippet, terms) : "";
+    var previewHtml = renderPreview(r, terms);
+    // Only show the raw snippet paragraph if we have no richer preview.
+    var snippetHtml = (!r.preview && r.snippet) ? highlight(r.snippet, terms) : "";
     var cls = "result" + (r.ownIndex ? " atomic-hit" : "");
     var whyPanel = renderWhyPanel(r);
     return (
@@ -569,6 +592,7 @@
       '    <span class="safety-dot" data-verdict="pending" title="Scanning for safety…"></span>' +
       "  </div>" +
       '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + titleHtml + "</a>" +
+      previewHtml +
       (snippetHtml ? '<p class="snippet">' + snippetHtml + "</p>" : "") +
       whyPanel +
       "</article>"
