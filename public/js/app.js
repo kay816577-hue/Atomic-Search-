@@ -430,9 +430,10 @@
 
     $("results").hidden = false;
     var instantHtml = instant ? renderInstantCard(instant) : "";
+    var serverAnswerHtml = data.instant ? renderServerAnswerBox(data.instant) : "";
     var dymHtml = renderDidYouMean(data.didYouMean);
     var highlightTerms = buildHighlightTerms(q);
-    var html = instantHtml + dymHtml + results.map(function (r, i) {
+    var html = instantHtml + serverAnswerHtml + dymHtml + results.map(function (r, i) {
       return renderResult(r, i, highlightTerms);
     }).join("");
     html += renderRelated(data.related);
@@ -485,6 +486,57 @@
     }
   }
 
+  function renderServerAnswerBox(ans) {
+    if (!ans || !ans.text) return "";
+    var host = (function () { try { return new URL(ans.url).hostname.replace(/^www\./, ""); } catch (e) { return ""; } })();
+    var thumb = ans.thumbnail
+      ? '<img class="answer-thumb" src="' + esc(ans.thumbnail) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
+      : "";
+    var link = ans.url
+      ? '<a class="answer-link" href="' + esc(linkFor(ans.url)) + '" target="_top" rel="noreferrer noopener">Read more on ' + esc(host || ans.source) + " →</a>"
+      : "";
+    return (
+      '<article class="answer-box" data-source="' + esc(ans.source) + '">' +
+      '  <div class="answer-head">' +
+      '    <span class="answer-badge">Answer</span>' +
+      '    <span class="answer-source">From ' + esc(ans.source) + "</span>" +
+      "  </div>" +
+      '  <div class="answer-body">' + thumb +
+      '    <div class="answer-text-wrap">' +
+      (ans.title ? '<h3 class="answer-title">' + esc(ans.title) + "</h3>" : "") +
+      '      <p class="answer-text">' + esc(ans.text) + "</p>" +
+      "      " + link +
+      "    </div>" +
+      "  </div>" +
+      "</article>"
+    );
+  }
+
+  function renderWhyPanel(r) {
+    var s = r.signals || {};
+    var rows = [];
+    if (s.ownIndex) rows.push('<li><b>From our own index</b> — we crawled and stored this page in the Atomic index.</li>');
+    if (s.titleExact) rows.push("<li><b>Exact title match</b> — this page's title matches your query.</li>");
+    else if (s.titlePrefix) rows.push("<li><b>Title starts with your query</b> — strong on-topic signal.</li>");
+    if (s.homepage) rows.push("<li><b>Root page of a matching site</b> — this is the site's homepage.</li>");
+    if (s.popularHostTier && s.popularHostTier >= 3) rows.push("<li><b>Authoritative source</b> (tier 3) — reference-grade domain.</li>");
+    else if (s.popularHostTier && s.popularHostTier >= 2) rows.push("<li><b>Reliable source</b> (tier 2) — established technical / news domain.</li>");
+    else if (s.popularHostTier && s.popularHostTier >= 1) rows.push("<li><b>Community source</b> (tier 1) — forum / discussion.</li>");
+    if (s.agreement && s.agreement >= 2) rows.push("<li><b>" + s.agreement + " engines agreed</b> — multiple upstream sources returned this result.</li>");
+    if (typeof s.keywordCoverage === "number") {
+      rows.push("<li><b>Keyword match</b>: " + Math.round((s.keywordCoverage || 0) * 100) + "% of your query terms in the title.</li>");
+    }
+    if (typeof r.score === "number") rows.push('<li class="why-score">Final relevance score: <code>' + r.score.toFixed(3) + "</code></li>");
+    if (!rows.length) rows.push("<li>General web result.</li>");
+    return (
+      '<div class="why-panel" hidden>' +
+      "  <p class=\"why-title\">Why this result?</p>" +
+      "  <ul>" + rows.join("") + "</ul>" +
+      '  <p class="why-foot">Upstream engine identity is never shown — only Atomic signals.</p>' +
+      "</div>"
+    );
+  }
+
   function renderResult(r, i, terms) {
     var host = r.host || hostOf(r.url);
     var pathLabel = pathOf(r.url);
@@ -497,6 +549,7 @@
     var titleHtml = highlight(r.title || r.url, terms);
     var snippetHtml = r.snippet ? highlight(r.snippet, terms) : "";
     var cls = "result" + (r.ownIndex ? " atomic-hit" : "");
+    var whyPanel = renderWhyPanel(r);
     return (
       '<article class="' + cls + '" data-url="' + esc(r.url) + '">' +
       '  <div class="host-line">' +
@@ -509,11 +562,15 @@
       '    <button class="result-copy icon-btn" type="button" title="Copy URL" aria-label="Copy URL" data-copy="' + esc(r.url) + '">' +
       '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
       '    </button>' +
+      '    <button type="button" class="why-toggle icon-btn" title="Why this result?" aria-label="Why this result?" data-why>' +
+      '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r="0.6" fill="currentColor"/></svg>' +
+      '    </button>' +
       '    <button type="button" class="safe-view" title="Open via anonymising proxy in an isolated sandbox" data-safe-view="' + esc(r.url) + '">Safe view</button>' +
       '    <span class="safety-dot" data-verdict="pending" title="Scanning for safety…"></span>' +
       "  </div>" +
       '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + titleHtml + "</a>" +
       (snippetHtml ? '<p class="snippet">' + snippetHtml + "</p>" : "") +
+      whyPanel +
       "</article>"
     );
   }
@@ -678,6 +735,19 @@
     // URL through /proxy inside a locked-down iframe (no top-frame nav,
     // no cookies, no storage, script-only sandbox). Event-delegated so new
     // result lists keep working.
+    // "Why this result?" toggle — shows the ranking signals panel.
+    document.body.addEventListener("click", function (ev) {
+      var why = ev.target.closest && ev.target.closest("[data-why]");
+      if (!why) return;
+      ev.preventDefault();
+      var card = why.closest(".result");
+      if (!card) return;
+      var panel = card.querySelector(".why-panel");
+      if (!panel) return;
+      panel.hidden = !panel.hidden;
+      why.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+    });
+
     document.body.addEventListener("click", function (ev) {
       var btn = ev.target.closest && ev.target.closest("[data-safe-view]");
       if (!btn) return;

@@ -122,15 +122,23 @@ function popularHostBoost(url) {
 // Simple keyword-relevance score for an item. Not an embedding — we don't
 // want to drag a 400MB model onto Render's free tier — but good enough to
 // push results whose title+snippet actually cover the query tokens above
-// results that just happen to share a word. Returns a 0..~1 scalar.
+// results that just happen to share a word. Returns a 0..~2 scalar.
 const QRY_STOPWORDS = new Set([
   "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
   "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
   "from", "what", "who", "why", "how", "do", "does", "did",
 ]);
+// Suffixes sites commonly append to titles that we strip before doing
+// exact-match checks. "Linux kernel - Wikipedia" should be treated as an
+// exact match for the query "linux kernel".
+const TITLE_SUFFIX_RE = /\s*[|\-–—·:]\s*(wikipedia(?:,\s*the\s*free\s*encyclopedia)?|wiki|mdn\s*web\s*docs|mdn|github|docs|documentation|official\s*site|home\s*page|home|blog)\s*$/i;
+function stripTitleBrand(t) {
+  return (t || "").replace(TITLE_SUFFIX_RE, "").trim();
+}
 function keywordRelevance(item, tokens) {
   if (!tokens || !tokens.length) return 0;
-  const title = (item.title || "").toLowerCase();
+  const rawTitle = (item.title || "").toLowerCase();
+  const title = stripTitleBrand(rawTitle).toLowerCase();
   const snip = (item.snippet || "").toLowerCase();
   const hay = title + " " + snip;
   let titleHits = 0;
@@ -146,7 +154,45 @@ function keywordRelevance(item, tokens) {
   let r = titleCov * 0.7 + hayCov * 0.3;
   const phrase = tokens.join(" ");
   if (phrase.length >= 4 && title.includes(phrase)) r += 0.2;
-  return Math.min(1.2, r);
+  // Strong exact-title match: the stripped title is exactly the query (or
+  // a very close subset). "Linux kernel" query → title "Linux kernel" wins
+  // over "Linux kernel version history". This is what makes the canonical
+  // page outrank tangential ones.
+  if (title === phrase) r += 0.8;
+  else if (title.startsWith(phrase + " ") || title.startsWith(phrase + ":")) r += 0.4;
+  else if (title.endsWith(" " + phrase)) r += 0.2;
+  // Shortness preference: among results that all cover the query, shorter
+  // titles tend to be more on-topic. Compare word-count of title vs tokens.
+  if (titleCov === 1 && phrase.length >= 3) {
+    const titleWords = title.split(/\s+/).filter(Boolean).length;
+    const extra = Math.max(0, titleWords - tokens.length);
+    // ~+0.25 when title is exactly the query, decaying as noise is added.
+    r += 0.25 / (1 + extra * 0.5);
+  }
+  return Math.min(2.5, r);
+}
+
+// Give the root page of a site an extra nudge when the query matches the
+// host. `kernel.org/` for "linux kernel" should beat a deep article on
+// wiki that also matches. Only fires when the user's query actually
+// mentions the domain's distinctive word.
+function homepageBoost(url, tokens) {
+  if (!tokens || tokens.length === 0) return 0;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (path !== "" && path !== "/") return 0;
+    if (u.search) return 0;
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    // Use the registered-domain root word (kernel.org → "kernel").
+    const rootWord = host.split(".").slice(-2)[0] || host;
+    for (const t of tokens) {
+      if (t.length >= 3 && (rootWord === t || host.split(".").includes(t))) {
+        return 1; // single flat tier — ranker multiplies this.
+      }
+    }
+  } catch { /* ignore */ }
+  return 0;
 }
 
 // Reciprocal Rank Fusion with a cross-source agreement boost + popular-site
@@ -188,14 +234,19 @@ function rankBlend(lists, query = "") {
     // Popular-host bonus is small (fractional) and additive on the RRF
     // baseline BEFORE the agreement multiplier, so it layers cleanly.
     const popBonus = popTier * 0.015;
-    // Keyword relevance multiplier: 0.8x at no coverage, ~1.5x at full
-    // coverage + phrase match. Keeps truly-irrelevant popular-site pages
-    // from surfacing just because their host is on the list.
+    // Homepage of a host that matches the query gets a flat additive nudge
+    // big enough to push kernel.org/ above kernel.org/docs/… when the
+    // query is just "linux kernel".
+    const homeBonus = homepageBoost(it.url, qTokens) * 0.04;
+    // Keyword relevance multiplier: 0.6x at no coverage, up to ~2.1x for a
+    // short exact-title match. The wider spread (vs the previous 0.8..1.5
+    // band) is what actually lets title-matching beat cross-source agreement
+    // on canonical-page queries.
     const kw = keywordRelevance(it, qTokens);
-    const kwMult = 0.8 + kw * 0.6;
+    const kwMult = 0.6 + kw * 0.9;
     return {
       ...it,
-      score: (baseline + popBonus) * agreeBoost * kwMult,
+      score: (baseline + popBonus + homeBonus) * agreeBoost * kwMult,
       engines: Array.from(srcs),
       agreement: agree,
       popTier,
@@ -697,16 +748,46 @@ export async function metaSearch(q, opts = {}) {
   for (const extra of extraLists) {
     for (const r of extra) if (r?.url) ownUrls.add(normaliseUrl(r.url));
   }
-  merged = uniqBy(merged, (r) => r.url).map((r) => ({
-    url: r.url,
-    host: hostFromUrl(r.url),
-    title: r.title,
-    snippet: r.snippet,
-    // Single, branded source — never leak the upstream engine id.
-    engines: ["atomic"],
-    ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
-    score: Math.round(r.score * 1000) / 1000,
-  }));
+  // Tokens used for relevance filter + "why this result" signal building.
+  const relevanceStopwords = new Set([
+    "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
+    "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
+    "from", "what", "who", "why", "how", "do", "does", "did",
+  ]);
+  const qAllTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+  const qTokens = qAllTokens.filter((t) => !relevanceStopwords.has(t));
+  const effTokens = qTokens.length ? qTokens : qAllTokens;
+  // Build the "why this result" signals so the UI can show the user what
+  // actually contributed to a result's position. We never leak upstream
+  // engine names — everything here is either generic ("X engines agreed")
+  // or an Atomic-internal signal (ownIndex, popularHost, titleMatch).
+  merged = uniqBy(merged, (r) => r.url).map((r) => {
+    const titleLc = stripTitleBrand((r.title || "").toLowerCase());
+    const phrase = qTokens.join(" ");
+    const kwCov = qTokens.length
+      ? qTokens.reduce((n, t) => n + (titleLc.includes(t) ? 1 : 0), 0) / qTokens.length
+      : 0;
+    const signals = {
+      agreement: r.agreement || 1,
+      popularHostTier: r.popTier || 0,
+      ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
+      titleExact: phrase.length >= 3 && titleLc === phrase,
+      titlePrefix: phrase.length >= 3 && (titleLc.startsWith(phrase + " ") || titleLc.startsWith(phrase + ":")),
+      homepage: homepageBoost(r.url, qTokens) > 0,
+      keywordCoverage: Math.round(kwCov * 100) / 100,
+    };
+    return {
+      url: r.url,
+      host: hostFromUrl(r.url),
+      title: r.title,
+      snippet: r.snippet,
+      // Single, branded source — never leak the upstream engine id.
+      engines: ["atomic"],
+      ownIndex: signals.ownIndex,
+      score: Math.round(r.score * 1000) / 1000,
+      signals,
+    };
+  });
   // Defense-in-depth NSFW filter. Even though the search endpoint also
   // filters, upstream engines occasionally leak adult content on otherwise
   // innocent queries — strip them here too.
@@ -718,14 +799,6 @@ export async function metaSearch(q, opts = {}) {
   // upstream engines sometimes return pages that only share one word
   // with the query. Atomic-index rows and Wikipedia articles are exempt
   // (they're already strongly-matched signals).
-  const relevanceStopwords = new Set([
-    "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
-    "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
-    "from", "what", "who", "why", "how", "do", "does", "did",
-  ]);
-  const qAllTokens = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
-  const qTokens = qAllTokens.filter((t) => !relevanceStopwords.has(t));
-  const effTokens = qTokens.length ? qTokens : qAllTokens;
   if (effTokens.length >= 2) {
     const minCoverage = 0.5; // must match at least half the meaningful tokens
     merged = merged.filter((r) => {
@@ -741,23 +814,94 @@ export async function metaSearch(q, opts = {}) {
 
   // Knowledge-card promotion: if Wikipedia returned an article whose title
   // looks like it's ABOUT the query (i.e. contains every query token), hoist
-  // it to position 0. This is the difference between "search 'google' →
-  // support.google.com spam" and "search 'google' → Wikipedia's Google
-  // article". Only triggers on page 1 so paged results aren't reshuffled.
+  // it to position 0. Among multiple matches we pick the SHORTEST title —
+  // "Linux kernel" beats "Linux kernel version history" beats
+  // "Linux kernel mailing list". Only triggers on page 1 so paged results
+  // aren't reshuffled.
   if (page === 1) {
-    const wikiIdx = merged.findIndex((r) => {
-      if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
-      const t = (r.title || "").toLowerCase();
-      return qAllTokens.every((tok) => t.includes(tok));
-    });
-    if (wikiIdx > 0) {
-      const [wiki] = merged.splice(wikiIdx, 1);
+    const wikiMatches = merged
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => {
+        if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
+        const t = (r.title || "").toLowerCase();
+        return qAllTokens.every((tok) => t.includes(tok));
+      })
+      .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
+    if (wikiMatches.length && wikiMatches[0].i > 0) {
+      const best = wikiMatches[0];
+      const [wiki] = merged.splice(best.i, 1);
       merged.unshift(wiki);
     }
   }
 
+  // Host-diversity cap on page 1: don't let a single host occupy more than
+  // N slots in the top results. This prevents Reddit / forum link-dumps
+  // from crowding out authoritative sources. Own-index hits are exempt.
+  if (page === 1) {
+    const MAX_PER_HOST = 3;
+    const counts = new Map();
+    const head = [];
+    const tail = [];
+    for (const r of merged) {
+      const h = (r.host || "").toLowerCase();
+      const n = counts.get(h) || 0;
+      if (r.ownIndex || !h || n < MAX_PER_HOST) {
+        counts.set(h, n + 1);
+        head.push(r);
+      } else {
+        tail.push(r);
+      }
+    }
+    merged = [...head, ...tail];
+  }
+
   const hasMore = merged.length > perPage;
   const results = merged.slice(0, perPage);
+
+  // Instant-answer box (top-of-page). Only on page 1. Best-effort: we look
+  // for a Wikipedia match and fetch its summary via the public REST extract
+  // API (anonymous, no key). If Wikipedia has no extract, we fall back to
+  // the best on-topic snippet from the top results.
+  let instant = null;
+  if (page === 1 && results.length) {
+    try {
+      const wiki = results.find((r) => /en\.wikipedia\.org\/wiki\//.test(r.url));
+      if (wiki) {
+        const slug = decodeURIComponent(wiki.url.split("/wiki/")[1] || "").split("#")[0];
+        if (slug) {
+          const res = await privateFetch(
+            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`,
+            { timeout: 4000, headers: { Accept: "application/json" } }
+          );
+          if (res.ok) {
+            const j = await res.json();
+            if (j?.extract && !isNsfwText(j.extract)) {
+              instant = {
+                source: "Wikipedia",
+                title: j.title || wiki.title,
+                text: j.extract.slice(0, 600),
+                url: wiki.url,
+                thumbnail: j.thumbnail?.source || null,
+              };
+            }
+          }
+        }
+      }
+      if (!instant) {
+        // Fallback: synthesise from the strongest on-topic snippet.
+        const cand = results.find((r) => r.snippet && r.snippet.length > 80);
+        if (cand) {
+          instant = {
+            source: cand.ownIndex ? "Atomic index" : "Top result",
+            title: cand.title,
+            text: cand.snippet.slice(0, 400),
+            url: cand.url,
+            thumbnail: null,
+          };
+        }
+      }
+    } catch { /* instant answer is best-effort, never fatal */ }
+  }
 
   return {
     query,
@@ -766,6 +910,7 @@ export async function metaSearch(q, opts = {}) {
     results,
     total: merged.length,
     hasMore,
+    instant,
     // Internal-only engine counts are omitted on purpose. Front-end doesn't
     // need them and we don't want to leak upstream identity.
   };

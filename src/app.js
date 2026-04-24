@@ -192,6 +192,17 @@ async function buildOwnResults(q) {
       score,
       titleHit,
       ownIndex: true,
+      // Minimal "why this result" signal so the UI can explain own-index
+      // rows that skip the meta fuser (ownFused / ownTailPool paths).
+      signals: {
+        agreement: 1,
+        popularHostTier: 0,
+        ownIndex: true,
+        titleExact: !!titleHit,
+        titlePrefix: false,
+        homepage: false,
+        keywordCoverage: titleHit ? 1 : 0,
+      },
     };
   });
 }
