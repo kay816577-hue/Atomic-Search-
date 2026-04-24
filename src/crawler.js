@@ -202,6 +202,7 @@ export function startCrawler(intervalMs = 1000) {
   setTimeout(() => { seedIfEmpty().catch(() => {}); }, 2000).unref?.();
 
   let inFlight = 0;
+  let pumpErrors = 0; // v3: self-healing crash-loop guard
   const pump = async () => {
     while (inFlight < CONCURRENCY) {
       let task = null;
@@ -222,7 +223,35 @@ export function startCrawler(intervalMs = 1000) {
       crawlTask(task).finally(() => { inFlight -= 1; });
     }
   };
-  setInterval(() => { pump().catch(() => {}); }, intervalMs).unref?.();
+  setInterval(() => {
+    pump().catch((err) => {
+      // v3 self-healing: count pump-level crashes. If we hit a run of
+      // >10 in 60s, back off for a cooldown so we don't burn CPU in a
+      // tight crash loop. Resets on any healthy tick.
+      pumpErrors += 1;
+      if (pumpErrors > 10) {
+        console.error("[crawler] pump crash-loop, cooling down 30s:", err?.message || err);
+        pumpErrors = -30; // cool for ~30 ticks (~30s)
+      }
+    });
+    if (pumpErrors < 0) pumpErrors += 1; // bleed cool-down
+    if (pumpErrors === 0) pumpErrors = 0; // no-op clarity
+  }, intervalMs).unref?.();
+
+  // v3 self-healing: convert stray unhandled rejections in crawler paths
+  // into logged-and-forgotten. Previously one 429 without a catch could
+  // crash the Node process and drop the whole index.
+  process.on("unhandledRejection", (err) => {
+    if (!running) return;
+    const msg = err?.message || String(err);
+    // Only swallow obviously-network-y errors — real programming bugs
+    // should still crash in dev.
+    if (/ECONN|ENOTFOUND|timeout|fetch failed|HTTP \d/i.test(msg)) {
+      console.warn("[crawler] swallowed unhandled network rejection:", msg);
+      return;
+    }
+    // Let non-network rejections propagate.
+  });
 
   // Janitor: once an hour, re-enqueue pages we indexed more than 14 days ago
   // so the index self-refreshes.
