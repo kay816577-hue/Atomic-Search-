@@ -86,10 +86,27 @@ export function normaliseUrl(u) {
   try {
     const url = new URL(u);
     url.hash = "";
-    // Canonicalise host: lowercase + strip www. so kernel.org / www.kernel.org
-    // collapse to one key (this is critical for RRF cross-source agreement —
-    // without it popular sites get duplicated and lose their boost).
-    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    // Canonicalise host: lowercase + strip common variant prefixes so
+    // kernel.org / www.kernel.org / m.kernel.org / amp.kernel.org all
+    // collapse to one key. Critical for RRF cross-source agreement —
+    // without it popular sites appear as duplicates and each loses the
+    // boost that comes from multiple engines agreeing on one canonical
+    // URL.
+    url.hostname = url.hostname
+      .toLowerCase()
+      .replace(/^(www|m|amp|www1|www2|mobile)\./, "");
+    // Google AMP URLs like www.google.com/amp/s/example.com/foo are a
+    // canonical-destination wrapper — collapse them to the destination.
+    if (/^(?:www\.)?google\.[^/]+$/.test(url.hostname) && url.pathname.startsWith("/amp/s/")) {
+      try {
+        const dest = url.pathname.replace(/^\/amp\/s\//, "https://");
+        return normaliseUrl(dest + url.search + url.hash);
+      } catch { /* ignore */ }
+    }
+    // Drop trailing /amp on paths: /foo/amp -> /foo.
+    if (/\/amp\/?$/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/amp\/?$/, "") || "/";
+    }
     // Strip tracking params — both explicit names and anything starting
     // with a known prefix (utm_*, mc_*, mtm_*, etc).
     const toDrop = [];

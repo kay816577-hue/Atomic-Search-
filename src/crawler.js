@@ -109,11 +109,11 @@ async function seedIfEmpty() {
 // a process-local LRU of "already enqueued" URLs so we avoid the DB
 // round-trip for the most common dupes.
 
-const CONCURRENCY = 8;
+const CONCURRENCY = 12;
 const PER_HOST = 4;
-const PER_HOST_MIN_GAP_MS = 250;
-const LINKS_PER_PAGE = 40;
-const DEDUP_LRU_CAP = 50000;
+const PER_HOST_MIN_GAP_MS = 150;
+const LINKS_PER_PAGE = 50;
+const DEDUP_LRU_CAP = 80000;
 
 const dedupLru = new Set();
 function noteSeen(url) {
@@ -229,3 +229,23 @@ export function startCrawler(intervalMs = 1000) {
 }
 
 export { stats };
+
+// Public seed API — every /api/search call hands us the URLs it returned
+// so we enqueue them for future crawls. Free organic index growth, no
+// extra user action required. Dedup'd by the same LRU the crawler uses.
+export async function seedFromSearch(urls) {
+  if (!Array.isArray(urls) || !urls.length) return 0;
+  let n = 0;
+  for (const raw of urls.slice(0, 30)) {
+    if (typeof raw !== "string") continue;
+    try {
+      if (!isSafeUrl(raw)) continue;
+      if (isNsfwUrl(raw)) continue;
+      const norm = normaliseUrl(raw);
+      if (noteSeen(norm)) continue;
+      await enqueueCrawl(norm).catch(() => {});
+      n++;
+    } catch { /* ignore */ }
+  }
+  return n;
+}

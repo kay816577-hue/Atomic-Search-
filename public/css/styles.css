@@ -1438,3 +1438,44 @@ html[data-density="spacious"] .result { padding: 18px 20px; margin: 18px 0; }
   text-decoration: none;
 }
 .answer-box .answer-sources li a:hover { background: var(--bg-elev-1); color: var(--accent); }
+
+/* ---------- Round-2 UI polish: nicer cards, smoother pills --------- */
+.result {
+  border-radius: 12px;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.result:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: var(--bg-elev-1);
+}
+.result .title a {
+  transition: color 120ms ease;
+}
+.answer-box {
+  border-radius: 14px;
+}
+
+/* Focus ring on primary input is rounder and softer. */
+#q:focus {
+  box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.22);
+}
+
+/* Pill buttons used everywhere — unified style. */
+.pill,
+.chip {
+  border-radius: 999px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+/* Privacy pictogram row on the light themes looks nicer with slightly
+ * lifted shadow than a hard border. */
+html:not([data-theme]) .privacy-pictograms,
+[data-theme="atom-light"] .privacy-pictograms,
+[data-theme="google"] .privacy-pictograms,
+[data-theme="paper"] .privacy-pictograms,
+[data-theme="solarized-light"] .privacy-pictograms,
+[data-theme="github-light"] .privacy-pictograms,
+[data-theme="candy"] .privacy-pictograms {
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.06);
+}
