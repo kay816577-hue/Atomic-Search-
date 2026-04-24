@@ -204,6 +204,7 @@ async function buildOwnResults(q) {
         authority: 0,
         rrf: 0,
         structure: 0,
+        proximity: titleHit ? 0.5 : 0, // v5: shape parity with aggregator
       },
       signals: {
         agreement: 1,
@@ -784,6 +785,9 @@ export function buildApp() {
     const body = await c.req.json().catch(() => ({}));
     const url = (body.url || "").trim();
     if (!isSafeUrl(url)) return c.json({ ok: false, error: "Invalid URL" }, 400);
+    // v3: refuse 18+ and gambling domains at the submit edge too, not just
+    // in the crawler. Keeps the submissions table clean from the start.
+    if (isNsfwUrl(url)) return c.json({ ok: false, error: "URL domain is blocked" }, 400);
     await addSubmission(url);
     // Kick an eager crawl so the submitted URL enters the Atomic index on
     // the next tick, and fire-and-forget a snapshot request so the GitHub
