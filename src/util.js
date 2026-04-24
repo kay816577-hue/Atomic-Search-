@@ -86,6 +86,10 @@ export function normaliseUrl(u) {
   try {
     const url = new URL(u);
     url.hash = "";
+    // Canonicalise host: lowercase + strip www. so kernel.org / www.kernel.org
+    // collapse to one key (this is critical for RRF cross-source agreement —
+    // without it popular sites get duplicated and lose their boost).
+    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
     // Strip tracking params — both explicit names and anything starting
     // with a known prefix (utm_*, mc_*, mtm_*, etc).
     const toDrop = [];
@@ -97,6 +101,15 @@ export function normaliseUrl(u) {
       }
     }
     for (const k of toDrop) url.searchParams.delete(k);
+    // Sort remaining query params alphabetically so the same URL with
+    // params in different orders collapses to one key.
+    const entries = [...url.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b));
+    url.search = "";
+    for (const [k, v] of entries) url.searchParams.append(k, v);
+    // Collapse bare trailing slash on root path ("https://host/" -> "https://host").
+    if (url.pathname === "/" && !url.search) {
+      return url.origin;
+    }
     return url.toString();
   } catch {
     return u;
