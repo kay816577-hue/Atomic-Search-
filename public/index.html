@@ -10,11 +10,28 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/css/themes.css" />
     <link rel="stylesheet" href="/css/styles.css" />
+    <link rel="stylesheet" href="/css/v3.css" />
   </head>
   <body>
     <!-- Home view -->
     <section id="home" class="home">
       <div class="home-inner">
+        <span class="home-logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64">
+            <defs>
+              <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="var(--accent, #ff4d4d)"/>
+                <stop offset="100%" stop-color="var(--accent-2, #ff7a3d)"/>
+              </linearGradient>
+            </defs>
+            <g fill="none" stroke="url(#logoGrad)" stroke-width="2.4" opacity="0.95">
+              <ellipse class="orbit-a" cx="32" cy="32" rx="22" ry="9"/>
+              <ellipse class="orbit-b" cx="32" cy="32" rx="22" ry="9"/>
+              <ellipse class="orbit-c" cx="32" cy="32" rx="22" ry="9"/>
+            </g>
+            <circle cx="32" cy="32" r="6" fill="url(#logoGrad)"/>
+          </svg>
+        </span>
         <h1 class="logo-big" aria-label="Atomic">
           <span class="a1">A</span><span class="a2">t</span><span class="a3">o</span><span class="a4">m</span><span class="a5">i</span><span class="a6">c</span><span class="beta-badge" style="margin-left:10px;vertical-align:middle">beta</span>
         </h1>
@@ -289,12 +306,29 @@
                 <option value="solarized-light">Solarized Light</option>
                 <option value="github-light">GitHub Light</option>
                 <option value="candy">Candy</option>
+                <option value="paper-white">Paper White</option>
+                <option value="mint-cream">Mint Cream</option>
+              </optgroup>
+              <optgroup label="Fresh">
+                <option value="carbon-fiber">Carbon Fiber</option>
+                <option value="blueprint">Blueprint</option>
+                <option value="neon-pink">Neon Pink</option>
+                <option value="mocha">Mocha</option>
               </optgroup>
               <optgroup label="Specialty">
                 <option value="high-contrast">High Contrast (A11y)</option>
                 <option value="retro-crt">Retro CRT (scanlines)</option>
               </optgroup>
             </select>
+          </div>
+
+          <h3>AI mode</h3>
+          <div class="setting-row">
+            <div>
+              <div class="label">Enable AI (opt-in, client-side)</div>
+              <div class="hint">A small model (~180 MB) downloads once to your browser and never talks to a server. Off by default.</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="setting-ai"><span class="slider"></span></label>
           </div>
 
           <h3>Search</h3>
@@ -362,10 +396,79 @@
       </div>
     </div>
 
+    <!-- What's-new modal: shown once per version. Gated on
+         localStorage key atomic:whatsnew:v3.0.0 so bumping the
+         version re-triggers it. "Don't show again" sets the key
+         to "dismissed" permanently. -->
+    <div id="whatsnew-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="whatsnew-title">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="whatsnew-title">What's new in v3.0 — "Redesign &amp; AI"</h2>
+          <button id="whatsnew-close" class="icon-btn modal-close" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body" id="whatsnew-body">
+          <ul class="whatsnew-list">
+            <li><strong>Redesigned UI</strong> — cleaner topbar, new result cards with favicon chips, softer shadows, calmer hero.</li>
+            <li><strong>AI mode (opt-in, client-side)</strong> — enable in Settings. A tiny model runs entirely in your browser. Chat grounded on your current results. Zero server calls.</li>
+            <li><strong>Better ranking</strong> — per-query IDF, phrase proximity boost, freshness signal, parked/ad-heavy hosts demoted.</li>
+            <li><strong>Faster, bigger index</strong> — crawler concurrency 12 → 16, per-host politeness tuned, sitemap prefetch, bloom filter persists dedup across restarts.</li>
+            <li><strong>Command palette</strong> — press <kbd>Ctrl</kbd>+<kbd>K</kbd> anywhere to jump.</li>
+            <li><strong>Pin &amp; hide per result</strong>, favorite &amp; block domains, reading-mode view, translate button.</li>
+            <li><strong>New tools</strong> — TOTP viewer, DNS lookup, HTTP header viewer, contrast checker, CSV↔JSON, YAML↔JSON, markdown preview, diff side-by-side, stopwatch, countdown, and more.</li>
+            <li><strong>6 new themes</strong> — Carbon Fiber, Blueprint, Paper White, Neon Pink, Mocha, Mint Cream (56 total).</li>
+            <li><strong>Safe-view improvements</strong> — more URL rewrites, wider ad/tracker blocklist, top warning banner with live ads-blocked counter.</li>
+          </ul>
+          <div class="whatsnew-actions">
+            <button id="whatsnew-dismiss-version" class="btn-primary" type="button">Got it</button>
+            <button id="whatsnew-dismiss-forever" class="btn-secondary" type="button">Don't show again</button>
+          </div>
+          <p class="hint whatsnew-hint">You can re-open this from Settings → About → What's new.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI chat panel — renders when setting-ai is on and user hits "Ask AI". -->
+    <div id="ai-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="ai-title">
+      <div class="modal modal-lg">
+        <div class="modal-head">
+          <h2 id="ai-title">Ask AI <span class="ai-chip" title="The model runs in your browser only. Zero network after first load.">client-side · private</span></h2>
+          <button class="icon-btn modal-close" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="ai-status" class="ai-status hint">Model will download on first use (~180 MB, cached forever).</div>
+          <div id="ai-messages" class="ai-messages" aria-live="polite"></div>
+          <form id="ai-form" class="ai-form">
+            <input id="ai-input" type="text" placeholder="Ask a question about these results…" autocomplete="off" />
+            <button type="submit" id="ai-send">Send</button>
+          </form>
+          <p class="hint">AI answers may be wrong. Grounded on top results only.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command palette (Ctrl/Cmd-K). -->
+    <div id="cmdk-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="modal modal-cmdk">
+        <input id="cmdk-input" type="text" placeholder="Type a command or search…" autocomplete="off" />
+        <ul id="cmdk-list" class="cmdk-list"></ul>
+      </div>
+    </div>
+
     <script src="/js/themes.js"></script>
     <script src="/js/app.js"></script>
     <script src="/js/extras.js"></script>
     <script src="/js/pages.js"></script>
     <script src="/js/features.js"></script>
+    <script src="/js/whatsnew.js"></script>
+    <script src="/js/ai.js"></script>
+    <script src="/js/cmdk.js"></script>
   </body>
 </html>

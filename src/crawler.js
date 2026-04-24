@@ -109,11 +109,16 @@ async function seedIfEmpty() {
 // a process-local LRU of "already enqueued" URLs so we avoid the DB
 // round-trip for the most common dupes.
 
-const CONCURRENCY = 12;
-const PER_HOST = 4;
-const PER_HOST_MIN_GAP_MS = 150;
-const LINKS_PER_PAGE = 50;
-const DEDUP_LRU_CAP = 80000;
+// Round-4 speed tuning. On free-tier Render these are the upper bounds
+// before we start seeing event-loop lag; going higher hurts more than it
+// helps because the single vCPU can't parse HTML fast enough.
+const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 32;
+const PER_HOST = Number(process.env.CRAWL_PER_HOST) || 8;
+const PER_HOST_MIN_GAP_MS = Number(process.env.CRAWL_HOST_GAP_MS) || 75;
+const LINKS_PER_PAGE = Number(process.env.CRAWL_LINKS_PER_PAGE) || 100;
+const DEDUP_LRU_CAP = 250000;
+const FETCH_TIMEOUT_MS = Number(process.env.CRAWL_TIMEOUT_MS) || 4000;
+const MAX_HTML_BYTES = 800_000;
 
 const dedupLru = new Set();
 function noteSeen(url) {
@@ -149,11 +154,11 @@ async function crawlTask(task) {
   hostLastFetch.set(host, Date.now());
   try {
     if (!isSafeUrl(url)) { await dropFromQueue(url).catch(() => {}); return; }
-    const res = await privateFetch(url, { timeout: 6000 });
+    const res = await privateFetch(url, { timeout: FETCH_TIMEOUT_MS });
     if (!res.ok) { await recordCrawlFailure(url, `HTTP ${res.status}`).catch(() => {}); return; }
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text/html")) { await dropFromQueue(url).catch(() => {}); return; }
-    const html = (await res.text()).slice(0, 500_000);
+    const html = (await res.text()).slice(0, MAX_HTML_BYTES);
     const { title, text, document } = extract(html, url);
     if (isNsfwText(title, text)) { await dropFromQueue(url).catch(() => {}); return; }
     await insertPage({ url: normaliseUrl(url), title, text, host });
