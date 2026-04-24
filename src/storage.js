@@ -50,7 +50,15 @@ async function tryLoadSqlite() {
     const dir = process.env.DATA_DIR || path.join(process.cwd(), "data");
     fs.mkdirSync(dir, { recursive: true });
     db = new mod.default(path.join(dir, "atomic.db"));
+    // Performance-tuned PRAGMAs. WAL gives concurrent read/write, NORMAL
+    // sync is a safe speedup on WAL (fsync on checkpoints only), a bigger
+    // cache keeps hot indexes in RAM, and memory-mapped I/O lets SQLite
+    // page in pages as a memory region rather than reading each time.
     db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("cache_size = -20000");   // ~20 MB page cache
+    db.pragma("temp_store = MEMORY");
+    db.pragma("mmap_size = 134217728"); // 128 MB
     db.exec(`
       CREATE TABLE IF NOT EXISTS kv (
         k TEXT PRIMARY KEY,

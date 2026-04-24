@@ -100,64 +100,129 @@ async function seedIfEmpty() {
   } catch { /* ignore */ }
 }
 
-export function startCrawler(intervalMs = 5000) {
+// Crawler worker pool with per-host politeness.
+//
+// At any time up to CONCURRENCY fetches are in flight total, with
+// PER_HOST in-flight per host. Links extracted from each page are
+// enqueued (capped per page) so the queue fans out naturally.
+// Dedup at enqueue time is handled by storage.js (UNIQUE(url)); we add
+// a process-local LRU of "already enqueued" URLs so we avoid the DB
+// round-trip for the most common dupes.
+
+const CONCURRENCY = 8;
+const PER_HOST = 4;
+const PER_HOST_MIN_GAP_MS = 250;
+const LINKS_PER_PAGE = 40;
+const DEDUP_LRU_CAP = 50000;
+
+const dedupLru = new Set();
+function noteSeen(url) {
+  if (dedupLru.has(url)) return true;
+  if (dedupLru.size >= DEDUP_LRU_CAP) {
+    // Drop the oldest entry (insertion order).
+    const first = dedupLru.values().next().value;
+    if (first !== undefined) dedupLru.delete(first);
+  }
+  dedupLru.add(url);
+  return false;
+}
+
+const hostInFlight = new Map();
+const hostLastFetch = new Map();
+
+async function waitForHostSlot(host) {
+  // Spin until there's a free per-host slot AND the politeness gap has
+  // elapsed. Sleeps are cheap and keep us from hammering one domain.
+  while (true) {
+    const n = hostInFlight.get(host) || 0;
+    const last = hostLastFetch.get(host) || 0;
+    const now = Date.now();
+    if (n < PER_HOST && now - last >= PER_HOST_MIN_GAP_MS) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+async function crawlTask(task) {
+  const { url } = task;
+  const host = hostFromUrl(url) || "unknown";
+  hostInFlight.set(host, (hostInFlight.get(host) || 0) + 1);
+  hostLastFetch.set(host, Date.now());
+  try {
+    if (!isSafeUrl(url)) { await dropFromQueue(url).catch(() => {}); return; }
+    const res = await privateFetch(url, { timeout: 6000 });
+    if (!res.ok) { await recordCrawlFailure(url, `HTTP ${res.status}`).catch(() => {}); return; }
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("text/html")) { await dropFromQueue(url).catch(() => {}); return; }
+    const html = (await res.text()).slice(0, 500_000);
+    const { title, text, document } = extract(html, url);
+    if (isNsfwText(title, text)) { await dropFromQueue(url).catch(() => {}); return; }
+    await insertPage({ url: normaliseUrl(url), title, text, host });
+    await dropFromQueue(url).catch(() => {});
+    // Fan out: extract every outbound link, dedupe, enqueue. We
+    // deliberately shuffle-light the link set so the crawler doesn't
+    // always follow the first N links (which tend to be navigation).
+    const anchors = document.querySelectorAll("a[href]");
+    const seen = new Set();
+    let queued = 0;
+    for (const a of anchors) {
+      if (queued >= LINKS_PER_PAGE) break;
+      const href = a.getAttribute("href");
+      if (!href) continue;
+      try {
+        const abs = new URL(href, url).toString();
+        if (!isSafeUrl(abs)) continue;
+        if (isNsfwUrl(abs)) continue;
+        const norm = normaliseUrl(abs);
+        if (seen.has(norm)) continue;
+        seen.add(norm);
+        if (noteSeen(norm)) continue;
+        await enqueueCrawl(norm).catch(() => {});
+        queued += 1;
+      } catch { /* ignore */ }
+    }
+  } catch (err) {
+    if (task?.url) await recordCrawlFailure(task.url, err?.message || "fetch failed").catch(() => {});
+  } finally {
+    hostInFlight.set(host, Math.max(0, (hostInFlight.get(host) || 1) - 1));
+    hostLastFetch.set(host, Date.now());
+  }
+}
+
+export function startCrawler(intervalMs = 1000) {
   if (typeof process === "undefined" || !process.versions?.node) return;
   if (running) return;
   running = true;
   // Seed a few trusted hubs ~2s after boot so the crawler has something to
-  // chew on immediately and the index isn't stuck at 0 pages on first boot.
+  // chew on immediately.
   setTimeout(() => { seedIfEmpty().catch(() => {}); }, 2000).unref?.();
-  const tick = async () => {
-    let task = null;
-    try {
-      task = await nextCrawlTask();
+
+  let inFlight = 0;
+  const pump = async () => {
+    while (inFlight < CONCURRENCY) {
+      let task = null;
+      try { task = await nextCrawlTask(); } catch { task = null; }
       if (!task) return;
-      const { url } = task;
-      if (!isSafeUrl(url)) { await dropFromQueue(url); return; }
-      const res = await privateFetch(url, { timeout: 8000 });
-      if (!res.ok) {
-        await recordCrawlFailure(url, `HTTP ${res.status}`);
-        return;
+      const host = hostFromUrl(task.url) || "unknown";
+      // Only take the task if there's an open slot for this host; otherwise
+      // put it back and try the next one. `nextCrawlTask` already marks the
+      // task as taken, so we re-enqueue with a tiny backoff.
+      const n = hostInFlight.get(host) || 0;
+      const last = hostLastFetch.get(host) || 0;
+      if (n >= PER_HOST || Date.now() - last < PER_HOST_MIN_GAP_MS) {
+        await dropFromQueue(task.url).catch(() => {});
+        await enqueueCrawl(task.url).catch(() => {});
+        continue;
       }
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("text/html")) { await dropFromQueue(url); return; }
-      const html = (await res.text()).slice(0, 500_000);
-      const { title, text, document } = extract(html, url);
-      // Content-level NSFW check — some benign-looking URLs host adult
-      // content. Drop without indexing if title or extracted text trips.
-      if (isNsfwText(title, text)) { await dropFromQueue(url); return; }
-      const host = hostFromUrl(url);
-      await insertPage({ url: normaliseUrl(url), title, text, host });
-      await dropFromQueue(url);
-      // Enqueue outbound links so the crawler naturally fans out and the
-      // Atomic index grows even without user-submitted URLs. Cap is tuned
-      // high enough to branch quickly but low enough that one spammy page
-      // can't flood the queue with 300 links.
-      let queued = 0;
-      for (const a of document.querySelectorAll("a[href]")) {
-        if (queued >= 40) break;
-        const href = a.getAttribute("href");
-        if (!href) continue;
-        try {
-          const abs = new URL(href, url).toString();
-          if (!isSafeUrl(abs)) continue;
-          if (isNsfwUrl(abs)) continue;
-          await enqueueCrawl(normaliseUrl(abs));
-          queued++;
-        } catch { /* ignore */ }
-      }
-    } catch (err) {
-      if (task?.url) await recordCrawlFailure(task.url, err?.message || "fetch failed").catch(() => {});
+      inFlight += 1;
+      crawlTask(task).finally(() => { inFlight -= 1; });
     }
   };
-  setInterval(tick, intervalMs).unref?.();
+  setInterval(() => { pump().catch(() => {}); }, intervalMs).unref?.();
 
   // Janitor: once an hour, re-enqueue pages we indexed more than 14 days ago
-  // so the index self-refreshes. Also prunes dead URLs by virtue of
-  // recordCrawlFailure tipping them over the retry budget. Fire once at
-  // boot to catch very stale rows, then on a slow interval.
+  // so the index self-refreshes.
   const janitor = async () => {
-    try { await reenqueueStale(14 * 24 * 3600 * 1000, 25); } catch { /* ignore */ }
+    try { await reenqueueStale(14 * 24 * 3600 * 1000, 50); } catch { /* ignore */ }
   };
   setTimeout(janitor, 60 * 1000).unref?.();
   setInterval(janitor, 60 * 60 * 1000).unref?.();

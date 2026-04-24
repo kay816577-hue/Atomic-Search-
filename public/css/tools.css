@@ -1,0 +1,164 @@
+/* Atomic Tools — styling for the /tools page.
+ * Grid of small widgets, each self-contained. Minimal decoration so
+ * widgets read like small forms rather than a magazine layout.
+ */
+body.tools-body { background: var(--bg); color: var(--text); }
+.tools-header {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 20px 8px;
+  text-align: center;
+}
+.tools-brand {
+  display: inline-block;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-decoration: none;
+}
+.tools-brand .beta-badge {
+  font-size: 12px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.tools-tag {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin: 8px auto 18px;
+  max-width: 620px;
+}
+.tools-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin: 0 0 18px;
+}
+.tools-nav a {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+.tools-nav a:hover { background: var(--bg-elev-2); }
+.tools-main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 20px 40px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.tool-widget {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.tool-widget h2 {
+  margin: 0;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tool-widget h2 .tool-kind {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  background: var(--bg-elev-2);
+  border-radius: 999px;
+  color: var(--text-dim);
+}
+.tool-widget .desc { font-size: 12px; color: var(--text-dim); margin: 0; }
+.tool-widget label {
+  font-size: 12px;
+  color: var(--text-dim);
+  display: block;
+  margin-bottom: 4px;
+}
+.tool-widget input[type=text],
+.tool-widget input[type=number],
+.tool-widget textarea,
+.tool-widget select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  box-sizing: border-box;
+}
+.tool-widget textarea {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.tool-widget output,
+.tool-widget .tool-output {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-height: 18px;
+  color: var(--text);
+}
+.tool-widget .tool-row { display: flex; gap: 6px; align-items: center; }
+.tool-widget .tool-row > * { min-width: 0; }
+.tool-widget button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tool-widget button.ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.tool-widget button:hover { filter: brightness(1.08); }
+.tool-widget .swatch {
+  display: inline-block;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.tool-widget .qr-canvas {
+  display: block;
+  margin: 0 auto;
+  background: #fff;
+  padding: 6px;
+  border-radius: 8px;
+}
+.tools-footer {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 20px 30px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.tools-footer a { color: var(--text); text-decoration: none; }
+.tools-footer a:hover { color: var(--accent); }
