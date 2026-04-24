@@ -79,8 +79,8 @@ function securityHeaders() {
 // Keyed by a non-cryptographic hash of the client IP (we don't need it to
 // be reversible — we just want NOT to store raw IPs). Bucket state is
 // entirely in memory and is garbage-collected when the bucket refills.
-const RATE_CAPACITY = 60;        // 60 requests…
-const RATE_REFILL_PER_MS = 60 / 60000; // …per minute, refilling continuously
+const RATE_CAPACITY = Number(process.env.RATE_CAPACITY) || 120; // v3: 60 → 120 rpm
+const RATE_REFILL_PER_MS = RATE_CAPACITY / 60000; // refills continuously at RATE_CAPACITY/min
 const RATE_BUCKETS = new Map(); // hash -> { tokens, updated }
 const RATE_MAX_BUCKETS = 8192;
 

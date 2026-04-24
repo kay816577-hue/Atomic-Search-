@@ -16,13 +16,35 @@
 // independently unit-testable (see ranking.test.js).
 
 export const WEIGHTS = Object.freeze({
-  bm25: 0.32,
-  titleMatch: 0.30,
+  bm25: 0.28,
+  titleMatch: 0.27,
   agreement: 0.10,
   authority: 0.12,
-  rrf: 0.08,
+  rrf: 0.07,
   structure: 0.08,
+  proximity: 0.08, // v5: phrase-proximity bonus in snippet
 });
+
+// v5 "parked / ad-heavy" host demotion. Appearing here reduces the final
+// score by up to PARKED_PENALTY. Conservative — only genuinely content-
+// free hosts belong here.
+const PARKED_HOSTS = new Set([
+  "example.com", "example.org", "example.net",
+  "parking.namebright.com", "sedoparking.com", "parking-page.com",
+  "domainmarket.com", "godaddy.com",
+  "hugedomains.com", "ww1.godaddy.com",
+  "buydomains.com", "dan.com",
+  "blogspot.com", // hostnames that are entirely parked land here only when
+  // the full domain matches; per-subdomain exceptions are handled via the
+  // allow-list in aggregator.js rather than by listing every subdomain.
+]);
+const PARKED_PENALTY = 0.35;
+
+export function parkedDemote(host) {
+  if (!host) return 0;
+  const h = host.toLowerCase().replace(/^www\./, "");
+  return PARKED_HOSTS.has(h) ? PARKED_PENALTY : 0;
+}
 
 // Tiny synonym table that demonstrably helps short queries. Additions
 // should be conservative — every entry widens BM25 recall.
@@ -232,6 +254,43 @@ export function rrfNormalised(rrfRaw, rrfMax) {
   if (!rrfMax) return 0;
   return clamp01(rrfRaw / rrfMax);
 }
+
+// v5: phrase-proximity score. Rewards results where query tokens appear
+// close to each other in the snippet (indicates the passage is actually
+// about the query, not just incidentally mentioning each word). Returns
+// a value in [0, 1].
+export function proximityScore(item, ctx) {
+  const tokens = ctx.tokens;
+  if (tokens.length < 2) return 0; // single-token queries get neutral 0
+
+  const text = ((item.title || "") + " " + (item.snippet || item.text || "")).toLowerCase();
+  if (!text) return 0;
+
+  // Find the first occurrence of each token. If any is missing, no
+  // proximity bonus.
+  const positions = [];
+  for (const tok of tokens) {
+    const variants = variantsForExport(tok);
+    let best = -1;
+    for (const v of variants) {
+      const idx = text.indexOf(v);
+      if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+    }
+    if (best < 0) return 0;
+    positions.push(best);
+  }
+
+  positions.sort((a, b) => a - b);
+  const span = positions[positions.length - 1] - positions[0];
+  // Perfect proximity (span of 0..40 chars) → 1. 300+ → 0.
+  if (span <= 40) return 1;
+  if (span >= 300) return 0;
+  return clamp01(1 - (span - 40) / 260);
+}
+
+// Internal variant helper exposed under another name so we don't have to
+// export `variantsFor` publicly (kept stable for tests).
+function variantsForExport(token) { return variantsFor(token); }
 
 // ---------- combine ----------
 
