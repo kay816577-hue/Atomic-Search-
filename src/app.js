@@ -21,11 +21,11 @@ import {
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { scanDownload, scanBuffer } from "./scan.js";
-import { crawlOne } from "./crawler.js";
+import { crawlOne, seedFromSearch } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
 import { requestSnapshot, forceSnapshot, getSyncStatus } from "./git_sync.js";
 
-const SEARCH_TTL = 15 * 60 * 1000; // 15 min per page — good enough, not stale
+const SEARCH_TTL = 30 * 60 * 1000; // 30 min per page — good enough, not stale
 const IMAGE_TTL = 30 * 60 * 1000;
 const SAFETY_TTL = 60 * 60 * 1000; // 1h (under the 24h cache in safety.js)
 
@@ -706,7 +706,10 @@ export function buildApp() {
     await cacheSet(key, out, SEARCH_TTL);
     // The eager slice already awaited top-5; fire-and-forget the rest so the
     // index keeps growing in the background without adding latency.
-    growIndex(merged, { eager: 10, queueCap: 30 }).catch(() => {});
+    growIndex(merged, { eager: 10, queueCap: 40 }).catch(() => {});
+    // Also seed every URL the meta engines returned (not just the
+    // re-ranked, de-duplicated slice) so tail results feed the crawler.
+    seedFromSearch((meta.results || []).map((r) => r.url)).catch(() => {});
     return c.json(out);
   }
 
