@@ -25,6 +25,11 @@ async function main() {
 
   const app = buildApp();
 
+  // Pretty URL for /tools — delivers the widgets page without the .html
+  // suffix. Must be registered BEFORE the static fallback so the fallback
+  // doesn't send index.html.
+  app.get("/tools", serveStatic({ path: "./public/tools.html" }));
+
   // Static frontend. `serveStatic` handles everything under ./public;
   // anything else falls through to index.html so client-side routing keeps
   // working.

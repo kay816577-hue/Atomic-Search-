@@ -495,6 +495,16 @@
     var link = ans.url
       ? '<a class="answer-link" href="' + esc(linkFor(ans.url)) + '" target="_top" rel="noreferrer noopener">Read more on ' + esc(host || ans.source) + " →</a>"
       : "";
+    // If the synth summariser stitched multiple pages, render them as
+    // little pill links so the reader can jump to any contributing source.
+    var sourcesHtml = "";
+    if (ans.sources && ans.sources.length) {
+      var pills = ans.sources.slice(0, 6).map(function (s) {
+        var h = s.host || (function () { try { return new URL(s.url).hostname.replace(/^www\./, ""); } catch (e) { return ""; } })();
+        return '<li><a href="' + esc(linkFor(s.url)) + '" target="_top" rel="noreferrer noopener" title="' + esc(s.title || "") + '">' + esc(h) + "</a></li>";
+      }).join("");
+      sourcesHtml = '<ul class="answer-sources" aria-label="Sources">' + pills + "</ul>";
+    }
     return (
       '<article class="answer-box" data-source="' + esc(ans.source) + '">' +
       '  <div class="answer-head">' +
@@ -506,6 +516,7 @@
       (ans.title ? '<h3 class="answer-title">' + esc(ans.title) + "</h3>" : "") +
       '      <p class="answer-text">' + esc(ans.text) + "</p>" +
       "      " + link +
+      sourcesHtml +
       "    </div>" +
       "  </div>" +
       "</article>"
@@ -781,8 +792,21 @@
       var body = $("safeview-body");
       if (!body) return;
       body.innerHTML = "";
+
+      var toolbar = document.createElement("div");
+      toolbar.className = "safeview-toolbar";
+      var hostname = "";
+      try { hostname = new URL(target).hostname.replace(/^www\./, ""); } catch (e) { /* ignore */ }
+      toolbar.innerHTML =
+        '<span class="sv-badge">Anonymised</span>' +
+        '<span class="sv-host">' + esc(hostname) + '</span>' +
+        '<span class="sv-status" data-ads="0">Ads blocked: <b>0</b></span>' +
+        '<span class="sv-note">Cookies off \u2022 Trackers off \u2022 Login/verification will not work</span>' +
+        '<a class="sv-open" href="' + esc(target) + '" target="_blank" rel="noreferrer noopener">Open real link \u2192</a>';
+      body.appendChild(toolbar);
+
       var frame = document.createElement("iframe");
-      frame.src = "/proxy?url=" + encodeURIComponent(target);
+      frame.src = "/proxy?sv=1&url=" + encodeURIComponent(target);
       frame.setAttribute("sandbox", "allow-scripts allow-forms");
       frame.setAttribute("referrerpolicy", "no-referrer");
       frame.setAttribute("loading", "lazy");
@@ -790,6 +814,22 @@
       frame.className = "vm-frame";
       body.appendChild(frame);
       openModal("safeview-modal");
+    });
+
+    // Listen for ad-blocked counters posted by the runtime shim inside the
+    // proxied page, and surface the count in the toolbar.
+    window.addEventListener("message", function (ev) {
+      var d = ev.data;
+      if (!d || !d._atomicProxy) return;
+      var status = document.querySelector(".safeview-toolbar .sv-status");
+      if (!status) return;
+      var n = Math.max(0, parseInt(d.adsBlocked, 10) || 0);
+      var cur = parseInt(status.getAttribute("data-ads"), 10) || 0;
+      if (n > cur) {
+        status.setAttribute("data-ads", String(n));
+        var b = status.querySelector("b");
+        if (b) b.textContent = String(n);
+      }
     });
     Array.prototype.forEach.call(document.querySelectorAll(".modal-close"), function (b) {
       b.addEventListener("click", function (e) {
@@ -825,6 +865,7 @@
       $("q").value = q;
       pushUrl();
       setTab(state.tab);
+      try { window.dispatchEvent(new CustomEvent("atomic:search", { detail: { q: q } })); } catch (e) { /* ignore */ }
     }
     $("home-form").addEventListener("submit", function (e) {
       e.preventDefault();

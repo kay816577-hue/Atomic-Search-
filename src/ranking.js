@@ -16,13 +16,36 @@
 // independently unit-testable (see ranking.test.js).
 
 export const WEIGHTS = Object.freeze({
-  bm25: 0.34,
-  titleMatch: 0.28,
-  agreement: 0.12,
-  authority: 0.10,
-  rrf: 0.10,
-  structure: 0.06,
+  bm25: 0.32,
+  titleMatch: 0.30,
+  agreement: 0.10,
+  authority: 0.12,
+  rrf: 0.08,
+  structure: 0.08,
 });
+
+// Tiny synonym table that demonstrably helps short queries. Additions
+// should be conservative — every entry widens BM25 recall.
+const SYNONYMS = {
+  docs: ["documentation", "doc"],
+  documentation: ["docs"],
+  js: ["javascript"],
+  javascript: ["js"],
+  ts: ["typescript"],
+  typescript: ["ts"],
+  py: ["python"],
+  python: ["py"],
+  rs: ["rust"],
+  go: ["golang"],
+  golang: ["go"],
+  k8s: ["kubernetes"],
+  kubernetes: ["k8s"],
+  postgres: ["postgresql"],
+  postgresql: ["postgres"],
+  psql: ["postgresql", "postgres"],
+  gh: ["github"],
+  so: ["stackoverflow"],
+};
 
 const STOPWORDS = new Set([
   "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
@@ -78,6 +101,40 @@ function termFrequency(text, token) {
   return m ? m.length : 0;
 }
 
+// Generate conservative stem variants for a token: trailing-s drop/add,
+// common -ing/-ed endings. Returns an array that always includes the
+// original. Each variant is matched with a reduced weight so "running"
+// doesn't dominate "run" but still scores.
+function variantsFor(token) {
+  const out = new Set([token]);
+  const syns = SYNONYMS[token];
+  if (syns) for (const s of syns) out.add(s);
+  // Plural/singular
+  if (token.length > 3) {
+    if (token.endsWith("ies")) out.add(token.slice(0, -3) + "y");
+    else if (token.endsWith("es")) out.add(token.slice(0, -2));
+    else if (token.endsWith("s")) out.add(token.slice(0, -1));
+    else out.add(token + "s");
+  }
+  // ing / ed
+  if (token.length > 5 && token.endsWith("ing")) out.add(token.slice(0, -3));
+  if (token.length > 4 && token.endsWith("ed")) out.add(token.slice(0, -2));
+  return Array.from(out);
+}
+
+// Highest term-frequency across any variant of the token. We don't sum
+// across variants because that would over-reward multi-form occurrences
+// (we want "docs" and "documentation" to count roughly the same).
+function tfWithVariants(text, token) {
+  const variants = variantsFor(token);
+  let best = 0;
+  for (const v of variants) {
+    const tf = termFrequency(text, v);
+    if (tf > best) best = tf;
+  }
+  return best;
+}
+
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -89,8 +146,8 @@ export function bm25Score(item, ctx) {
   const snippet = (item.snippet || item.text || "").toLowerCase();
   let sum = 0;
   for (const tok of tokens) {
-    const tfT = termFrequency(title, tok);
-    const tfS = termFrequency(snippet, tok);
+    const tfT = tfWithVariants(title, tok);
+    const tfS = tfWithVariants(snippet, tok);
     const satT = tfT / (tfT + BM25_K1);     // → [0,1)
     const satS = tfS / (tfS + BM25_K1);     // → [0,1)
     sum += BM25_TITLE_W * satT + BM25_SNIPPET_W * satS;

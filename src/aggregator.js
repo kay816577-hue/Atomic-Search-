@@ -240,6 +240,65 @@ function popularHostBoost(url) {
 // Output:
 //   Array<{ ...item, score, subScores, agreement, popTier, engines }>
 //   sorted by score descending.
+// Extractive summariser. Picks the best 2–4 sentences from the top
+// results and stitches them into a coherent paragraph. Deterministic,
+// local, no model — this is the "AI-free" answer block.
+function synthesiseExtractive(results, query) {
+  const top = results.slice(0, 6);
+  const qTerms = (query || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length >= 3);
+  if (!qTerms.length) return null;
+  const sources = [];
+  const seenHosts = new Set();
+  const seenSentences = new Set();
+  const picked = [];
+
+  for (const r of top) {
+    const text = (r.preview?.text || r.snippet || r.text || "").trim();
+    if (!text || text.length < 40) continue;
+    // Split into sentences on ". ", "! ", "? ". Keep reasonably-sized ones.
+    const sents = text
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 30 && s.length <= 260);
+    // Score each sentence by how many query terms it mentions.
+    const scored = sents
+      .map((s) => {
+        const l = s.toLowerCase();
+        const hits = qTerms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0);
+        return { s, hits };
+      })
+      .filter((x) => x.hits >= 1)
+      .sort((a, b) => b.hits - a.hits);
+    if (!scored.length) continue;
+    const best = scored[0].s;
+    // Dedup by near-equal prefixes so the answer doesn't repeat.
+    const key = best.slice(0, 60).toLowerCase();
+    if (seenSentences.has(key)) continue;
+    seenSentences.add(key);
+    picked.push(best);
+    if (!seenHosts.has(r.host)) {
+      seenHosts.add(r.host);
+      sources.push({ host: r.host, url: r.url, title: r.title });
+    }
+    if (picked.length >= 3) break;
+  }
+  if (!picked.length) return null;
+
+  let text = picked.join(" ");
+  if (text.length > 450) text = text.slice(0, 447) + "…";
+  return {
+    source: "Atomic synthesis",
+    title: query,
+    text,
+    sources,
+    thumbnail: null,
+  };
+}
+
 function rankBlend(lists, query = "") {
   const ctx = buildQueryContext(query);
 
@@ -273,9 +332,31 @@ function rankBlend(lists, query = "") {
       rrf: rrfNormalised(rrfRaw.get(it.url) || 0, rrfMax),
       structure: structureScore(it.url, ctx),
     };
+    // Exact-host-root boost: if a query token equals the registrable
+    // domain root (e.g. query has "kernel" and url is `kernel.org`), the
+    // site is almost certainly THE canonical source for the topic.
+    // Surface it with a small titleMatch lift, not a new weight, so the
+    // scoring math stays legible and the weights still sum to 1.
+    try {
+      const host = new URL(it.url).hostname.replace(/^www\./, "").toLowerCase();
+      const root = host.split(".").slice(-2)[0] || host;
+      if (ctx.tokens.some((t) => t === root && t.length >= 3)) {
+        subScores.titleMatch = Math.min(1, subScores.titleMatch + 0.15);
+      }
+    } catch { /* ignore */ }
+
+    const score = combineScore(subScores);
+    // Tiny URL-depth tiebreaker (no weight changes): shorter paths win
+    // when everything else is equal. Bounded at +0.02.
+    let depthBonus = 0;
+    try {
+      const u = new URL(it.url);
+      const depth = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean).length;
+      depthBonus = Math.max(0, (4 - depth)) * 0.005;
+    } catch { /* ignore */ }
     return {
       ...it,
-      score: combineScore(subScores),
+      score: Math.min(1, score + depthBonus),
       subScores,
       engines: Array.from(srcs),
       agreement: srcs.size,
@@ -897,8 +978,12 @@ export async function metaSearch(q, opts = {}) {
   // non-wiki results we synthesise from the snippet we already have.
   await enrichPreviews(results);
 
-  // Instant-answer box (page 1 only). Prefer the first Wikipedia hit's
-  // preview; fall back to the strongest on-topic snippet otherwise.
+  // Instant-answer box (page 1 only). Strategy:
+  //   1) If a Wikipedia hit exists, use its REST extract (richest, sourced).
+  //   2) Otherwise synthesise an extractive summary from the top results'
+  //      snippets — concatenate the best sentences, dedupe, cap at ~450
+  //      chars. This is a principled fallback, not a generative model.
+  //   3) Expose `sources` so the UI can render citation links.
   let instant = null;
   if (page === 1 && results.length) {
     const wiki = results.find(
@@ -911,18 +996,11 @@ export async function metaSearch(q, opts = {}) {
         text: wiki.preview.text,
         url: wiki.url,
         thumbnail: wiki.preview.thumbnail || null,
+        sources: [{ host: wiki.host, url: wiki.url, title: wiki.title }],
       };
     } else {
-      const cand = results.find((r) => r.snippet && r.snippet.length > 80);
-      if (cand) {
-        instant = {
-          source: cand.ownIndex ? "Atomic index" : "Top result",
-          title: cand.title,
-          text: cand.snippet.slice(0, 400),
-          url: cand.url,
-          thumbnail: null,
-        };
-      }
+      const synth = synthesiseExtractive(results, query);
+      if (synth) instant = synth;
     }
   }
 

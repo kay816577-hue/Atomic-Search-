@@ -8,6 +8,7 @@ import { metaSearch, engineHealth } from "./aggregator.js";
 import { metaImages } from "./images.js";
 import { proxyHandler } from "./proxy.js";
 import { safetyCheck } from "./safety.js";
+import { resolveInstant } from "./instant.js";
 import {
   cacheGet,
   cacheSet,
@@ -693,7 +694,15 @@ export function buildApp() {
     const related = buildRelated(q, merged);
     const didYouMean = merged.length === 0 ? null : buildDidYouMean(q, merged);
 
-    const out = { ...meta, query: q, results: merged, ownIndexCount, related, didYouMean, siteFilter };
+    // Tool-style instant answers (calculator, time, unit / currency convert,
+    // definition, weather, dice / coin / random) override the meta
+    // Wikipedia-first instant slot on page 1 because they're more precise.
+    let instantOverride = meta.instant;
+    if (page === 1) {
+      const tool = await resolveInstant(q);
+      if (tool) instantOverride = tool;
+    }
+    const out = { ...meta, query: q, results: merged, ownIndexCount, related, didYouMean, siteFilter, instant: instantOverride };
     await cacheSet(key, out, SEARCH_TTL);
     // The eager slice already awaited top-5; fire-and-forget the rest so the
     // index keeps growing in the background without adding latency.
@@ -948,7 +957,10 @@ ${verdict === "pending" ? `<script>
 
   app.all("/proxy", async (c) => {
     const url = c.req.query("url") || "";
-    return proxyHandler(url);
+    // `sv=1` marks the request as coming from the Safe-view sandbox, so
+    // the proxy injects the warning banner on top.
+    const safeView = c.req.query("sv") === "1";
+    return proxyHandler(url, { safeView });
   });
 
   // Auth / sign-in was removed in the v2 redesign. Atomic is now strictly

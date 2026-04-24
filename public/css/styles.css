@@ -1210,3 +1210,231 @@ body[data-theme="high-contrast"][data-view="home"]::before {
   color: var(--text-dim);
   opacity: 0.75;
 }
+
+/* ---------- Density + font-size ------------------------------------- */
+html[data-font-size="s"] body { font-size: 14px; }
+html[data-font-size="l"] body { font-size: 17px; }
+html[data-density="compact"] .result { padding: 8px 10px; margin: 6px 0; }
+html[data-density="compact"] .result-preview { padding: 6px 10px; }
+html[data-density="spacious"] .result { padding: 18px 20px; margin: 18px 0; }
+
+/* ---------- Privacy pictograms row ---------------------------------- */
+.privacy-pictograms {
+  margin: 16px 0 0;
+  padding: 10px 14px;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 14px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.privacy-pictograms li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: help;
+  padding: 3px 8px;
+  border-radius: 999px;
+  transition: background 120ms, color 120ms;
+}
+.privacy-pictograms li:hover { background: var(--bg-elev-2); color: var(--text); }
+.privacy-pictograms .pg-icon { font-size: 15px; line-height: 1; }
+.privacy-pictograms .pg-lbl { white-space: nowrap; }
+
+/* ---------- Voice search button ------------------------------------- */
+.voice-btn {
+  position: relative;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-btn:hover { color: var(--text); background: var(--bg-elev-1); }
+.voice-btn.listening {
+  color: #e14a4a;
+  border-color: #e14a4a;
+  animation: voicePulse 1s ease-in-out infinite alternate;
+}
+@keyframes voicePulse {
+  from { box-shadow: 0 0 0 0 rgba(225, 74, 74, 0.35); }
+  to   { box-shadow: 0 0 0 6px rgba(225, 74, 74, 0); }
+}
+
+/* ---------- Auto-suggest dropdown ----------------------------------- */
+.search-form { position: relative; }
+.atomic-suggest {
+  position: absolute;
+  left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+  padding: 4px;
+  z-index: 120;
+  max-height: 320px; overflow-y: auto;
+}
+.atomic-suggest [role="option"] {
+  padding: 7px 10px;
+  border-radius: 8px;
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  color: var(--text);
+}
+.atomic-suggest [role="option"]:hover,
+.atomic-suggest [role="option"][aria-selected="true"] { background: var(--bg-elev-2); }
+.atomic-suggest .s-kind {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.atomic-suggest .s-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Bookmark button ----------------------------------------- */
+.result .bookmark-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin-left: 6px;
+}
+.result .bookmark-btn:hover { color: var(--text); background: var(--bg-elev-1); }
+.result .bookmark-btn.on { color: var(--accent); }
+.result.kbd-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+/* ---------- Cheatsheet modal ---------------------------------------- */
+#cheatsheet-modal .cheat-list {
+  list-style: none;
+  padding: 0; margin: 0 0 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 14px;
+}
+#cheatsheet-modal .cheat-list li { font-size: 13px; color: var(--text); }
+#cheatsheet-modal kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: 12px;
+  color: var(--text);
+}
+#cheatsheet-modal code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* ---------- List modal (bookmarks/history) -------------------------- */
+.atomic-list {
+  list-style: none; padding: 0; margin: 0;
+  max-height: 55vh; overflow-y: auto;
+}
+.atomic-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.atomic-list li a { display: block; color: var(--text); text-decoration: none; }
+.atomic-list li a:hover { color: var(--accent); }
+.atomic-list li .muted {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.atomic-list .pill.del {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 8px;
+  border-radius: 999px;
+}
+.atomic-list .pill.del:hover { color: #e14a4a; border-color: #e14a4a; }
+.head-actions { display: flex; gap: 8px; }
+.head-actions .pill {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.head-actions .pill:hover { background: var(--bg-elev-2); }
+
+/* ---------- Toast --------------------------------------------------- */
+#atomic-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  z-index: 300;
+}
+#atomic-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- Synthesis / extractive answer box ----------------------- */
+.answer-box[data-source="Atomic synthesis"] .answer-source::before { content: "Synthesised from "; }
+.answer-box .answer-sources {
+  margin: 10px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+}
+.answer-box .answer-sources li a {
+  display: inline-block;
+  padding: 3px 9px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text);
+  text-decoration: none;
+}
+.answer-box .answer-sources li a:hover { background: var(--bg-elev-1); color: var(--accent); }
