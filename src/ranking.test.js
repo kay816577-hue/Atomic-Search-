@@ -96,11 +96,13 @@ test("rrfNormalised divides by observed max", () => {
 
 test("combineScore respects weights", () => {
   const full = combineScore({
-    bm25: 1, titleMatch: 1, agreement: 1, authority: 1, rrf: 1, structure: 1,
+    bm25: 1, titleMatch: 1, agreement: 1, authority: 1,
+    rrf: 1, structure: 1, proximity: 1,
   });
   assert.ok(Math.abs(full - 1) < 1e-9, `all-1 should give 1, got ${full}`);
   const empty = combineScore({
-    bm25: 0, titleMatch: 0, agreement: 0, authority: 0, rrf: 0, structure: 0,
+    bm25: 0, titleMatch: 0, agreement: 0, authority: 0,
+    rrf: 0, structure: 0, proximity: 0,
   });
   assert.equal(empty, 0);
 });

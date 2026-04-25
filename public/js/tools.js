@@ -514,6 +514,111 @@
     a.addEventListener("input", go); b.addEventListener("input", go); go();
   });
 
+  // -------- v3: Security widget — TOTP viewer ------------------------
+  register("Security", "TOTP code (2FA)", function (root) {
+    root.innerHTML =
+      '<p class="desc">Paste a base32 TOTP secret to see the rotating 6-digit code. Runs entirely in your browser.</p>' +
+      '<input type="text" data-secret placeholder="JBSWY3DPEHPK3PXP" autocomplete="off" spellcheck="false"/>' +
+      '<div class="tool-output" style="font-family:ui-monospace,monospace;font-size:28px;letter-spacing:6px;text-align:center;padding:12px" data-code>—</div>' +
+      '<div class="tool-output" data-meta style="font-size:12px">Enter a secret above.</div>';
+    var secret = $("[data-secret]", root), code = $("[data-code]", root), meta = $("[data-meta]", root);
+    function b32decode(s) {
+      s = (s || "").replace(/[^A-Z2-7]/gi, "").toUpperCase();
+      var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      var bits = "", out = [];
+      for (var i = 0; i < s.length; i++) {
+        var idx = alphabet.indexOf(s.charAt(i));
+        if (idx < 0) return null;
+        bits += ("00000" + idx.toString(2)).slice(-5);
+      }
+      for (var j = 0; j + 8 <= bits.length; j += 8) {
+        out.push(parseInt(bits.substr(j, 8), 2));
+      }
+      return new Uint8Array(out);
+    }
+    async function totp() {
+      var key = b32decode(secret.value.trim());
+      if (!key || !key.length) { code.textContent = "—"; meta.textContent = "Invalid base32 secret."; return; }
+      var counter = Math.floor(Date.now() / 30000);
+      var buf = new ArrayBuffer(8); var view = new DataView(buf);
+      view.setUint32(4, counter, false);
+      try {
+        var cryptoKey = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+        var sig = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, buf));
+        var off = sig[sig.length - 1] & 0x0f;
+        var bin = ((sig[off] & 0x7f) << 24) | (sig[off+1] << 16) | (sig[off+2] << 8) | sig[off+3];
+        var c = ("000000" + (bin % 1000000)).slice(-6);
+        code.textContent = c.slice(0,3) + " " + c.slice(3);
+        var left = 30 - Math.floor((Date.now() / 1000) % 30);
+        meta.textContent = "Rotates in " + left + "s — OTP algorithm: SHA-1, 6 digits, 30s period.";
+      } catch (e) { code.textContent = "—"; meta.textContent = "Failed: " + e.message; }
+    }
+    secret.addEventListener("input", totp);
+    totp();
+    setInterval(totp, 1000);
+  });
+
+  // -------- v3: Network widget — DNS lookup via Cloudflare DoH -------
+  register("Network", "DNS lookup", function (root) {
+    root.innerHTML =
+      '<p class="desc">Look up DNS records via Cloudflare DoH (1.1.1.1). Encrypted query, no DNS leak.</p>' +
+      '<div class="tool-row">' +
+      '<input type="text" data-host placeholder="example.com" autocomplete="off"/>' +
+      '<select data-type><option>A</option><option>AAAA</option><option>MX</option><option>TXT</option><option>NS</option><option>CNAME</option></select>' +
+      '<button class="btn-primary" data-go>Lookup</button>' +
+      '</div>' +
+      '<pre class="tool-output" data-o>Enter a host and press Lookup.</pre>';
+    var host = $("[data-host]", root), type = $("[data-type]", root),
+        btn = $("[data-go]", root), out = $("[data-o]", root);
+    async function go() {
+      var h = (host.value || "").trim();
+      if (!h) { out.textContent = "Enter a host."; return; }
+      out.textContent = "Looking up…";
+      try {
+        var r = await fetch("https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(h) + "&type=" + type.value,
+          { headers: { "Accept": "application/dns-json" } });
+        var j = await r.json();
+        if (!j.Answer) { out.textContent = "No records. (RCODE " + j.Status + ")"; return; }
+        out.textContent = j.Answer.map(function (a) { return a.name + "  " + a.type + "  " + a.data + "  ttl=" + a.TTL; }).join("\n");
+      } catch (e) { out.textContent = "Failed: " + e.message; }
+    }
+    btn.addEventListener("click", go);
+    host.addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+  });
+
+  // -------- v3: Visual widget — WCAG contrast checker ----------------
+  register("Visual", "Contrast checker (WCAG)", function (root) {
+    root.innerHTML =
+      '<p class="desc">Check the contrast ratio between two colours against WCAG AA/AAA.</p>' +
+      '<div class="tool-row">' +
+      '<input type="color" data-fg value="#1a1a1a"/>' +
+      '<input type="color" data-bg value="#ffffff"/>' +
+      '</div>' +
+      '<div class="tool-output" data-sample style="padding:18px;font-size:16px;text-align:center">The quick brown fox jumps over the lazy dog.</div>' +
+      '<div class="tool-output" data-o></div>';
+    var fg = $("[data-fg]", root), bg = $("[data-bg]", root),
+        samp = $("[data-sample]", root), o = $("[data-o]", root);
+    function lum(hex) {
+      var m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); if (!m) return 0;
+      var r = parseInt(m[1].slice(0,2),16)/255, g = parseInt(m[1].slice(2,4),16)/255, b = parseInt(m[1].slice(4,6),16)/255;
+      function c(v) { return v <= 0.03928 ? v/12.92 : Math.pow((v + 0.055)/1.055, 2.4); }
+      return 0.2126*c(r) + 0.7152*c(g) + 0.0722*c(b);
+    }
+    function go() {
+      var l1 = lum(fg.value), l2 = lum(bg.value);
+      var a = Math.max(l1, l2), b2 = Math.min(l1, l2);
+      var ratio = (a + 0.05) / (b2 + 0.05);
+      samp.style.color = fg.value; samp.style.background = bg.value;
+      var aaN = ratio >= 4.5, aaL = ratio >= 3, aaaN = ratio >= 7, aaaL = ratio >= 4.5;
+      o.innerHTML = "Ratio: <strong>" + ratio.toFixed(2) + ":1</strong><br>" +
+        "AA normal text: " + (aaN ? "pass" : "fail") + " · " +
+        "AA large text: " + (aaL ? "pass" : "fail") + " · " +
+        "AAA normal text: " + (aaaN ? "pass" : "fail") + " · " +
+        "AAA large text: " + (aaaL ? "pass" : "fail");
+    }
+    fg.addEventListener("input", go); bg.addEventListener("input", go); go();
+  });
+
   // -------- Render ----------------------------------------------------
 
   function boot() {

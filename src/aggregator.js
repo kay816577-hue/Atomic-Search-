@@ -15,6 +15,8 @@ import {
   structureScore,
   agreementScore,
   rrfNormalised,
+  proximityScore,
+  parkedDemote,
   combineScore,
   stripTitleBrand,
 } from "./ranking.js";
@@ -331,6 +333,7 @@ function rankBlend(lists, query = "") {
       authority: authorityScore(popTier),
       rrf: rrfNormalised(rrfRaw.get(it.url) || 0, rrfMax),
       structure: structureScore(it.url, ctx),
+      proximity: proximityScore(it, ctx),
     };
     // Exact-host-root boost: if a query token equals the registrable
     // domain root (e.g. query has "kernel" and url is `kernel.org`), the
@@ -345,7 +348,9 @@ function rankBlend(lists, query = "") {
       }
     } catch { /* ignore */ }
 
-    const score = combineScore(subScores);
+    // v5: parked-host demotion subtracts up to 0.35 from the final score.
+    const demote = parkedDemote(it.host);
+    const score = Math.max(0, combineScore(subScores) - demote);
     // Tiny URL-depth tiebreaker (no weight changes): shorter paths win
     // when everything else is equal. Bounded at +0.02.
     let depthBonus = 0;
@@ -899,6 +904,7 @@ export async function metaSearch(q, opts = {}) {
         authority: round3(sub.authority),
         rrf: round3(sub.rrf),
         structure: round3(sub.structure),
+        proximity: round3(sub.proximity),
       },
       signals,
     };

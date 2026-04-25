@@ -32,7 +32,33 @@ const BLOCKED_DOMAINS = new Set([
 // e.g. "something.pornhub.com" and the many ".xxx" / ".adult" TLDs.
 const BLOCKED_SUFFIXES = [
   ".xxx", ".adult", ".sex", ".porn", ".webcam",
+  ".casino", ".bet", ".poker", ".gambling",
 ];
+
+// v3: gambling / casino / sportsbook domains. Same treatment as NSFW —
+// dropped from search, images, crawler intake. Private search should not
+// be an ad channel for predatory-gambling networks.
+const GAMBLING_DOMAINS = new Set([
+  // Sportsbooks
+  "bet365.com", "williamhill.com", "betfair.com", "ladbrokes.com",
+  "paddypower.com", "unibet.com", "888sport.com", "betway.com",
+  "fanduel.com", "draftkings.com", "mgm.com", "caesars.com",
+  "bovada.lv", "bovada.com", "mybookie.ag", "betonline.ag",
+  "pointsbet.com", "barstoolsportsbook.com", "sportsbetting.ag",
+  "xbet.ag", "betus.com.pa", "betus.com", "5dimes.ag", "betnow.eu",
+  // Casinos
+  "stake.com", "stake.us", "roobet.com", "bitstarz.com",
+  "casino.com", "slotomania.com", "doubledown.com", "huuugecasino.com",
+  "jackpotcity.com", "casimba.com", "leovegas.com", "casumo.com",
+  "royalvegascasino.com", "casinoextreme.eu", "bovegas.com",
+  "planet7casino.com", "clubplayercasino.com", "slotsofvegas.com",
+  // Poker
+  "pokerstars.com", "pokerstars.eu", "partypoker.com", "888poker.com",
+  "ggpoker.com", "ggpoker.co.uk", "pokerbaazi.com", "wsop.com",
+  "americascardroom.eu", "ignitioncasino.eu", "acr-poker.com",
+  // Lottery / grey-area
+  "dailyfantasy.com", "myfavoritebookie.com", "vegas.com",
+]);
 
 // Known-malware / phishing hosts — derived from public URLhaus samples +
 // manual triage. Blocked across search, images, crawler, proxy. Kept
@@ -88,6 +114,18 @@ export function isMalwareUrl(url) {
   return false;
 }
 
+export function isGamblingUrl(url) {
+  if (!url) return false;
+  const host = hostOf(url);
+  if (!host) return false;
+  const parts = host.split(".");
+  for (let i = 0; i < parts.length - 1; i++) {
+    const candidate = parts.slice(i).join(".");
+    if (GAMBLING_DOMAINS.has(candidate)) return true;
+  }
+  return false;
+}
+
 export function isNsfwUrl(url) {
   if (!url) return false;
   const host = hostOf(url);
@@ -98,6 +136,7 @@ export function isNsfwUrl(url) {
     const candidate = parts.slice(i).join(".");
     if (BLOCKED_DOMAINS.has(candidate)) return true;
     if (MALWARE_DOMAINS.has(candidate)) return true;
+    if (GAMBLING_DOMAINS.has(candidate)) return true;
   }
   for (const suf of BLOCKED_SUFFIXES) {
     if (host.endsWith(suf)) return true;

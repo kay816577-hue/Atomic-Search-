@@ -1,6 +1,6 @@
 {
   "name": "atomic-search",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Atomic Search — privacy-first search with its own growing anonymous index. No trackers, no logs, no history.",
   "private": true,
   "type": "module",

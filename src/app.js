@@ -79,8 +79,8 @@ function securityHeaders() {
 // Keyed by a non-cryptographic hash of the client IP (we don't need it to
 // be reversible — we just want NOT to store raw IPs). Bucket state is
 // entirely in memory and is garbage-collected when the bucket refills.
-const RATE_CAPACITY = 60;        // 60 requests…
-const RATE_REFILL_PER_MS = 60 / 60000; // …per minute, refilling continuously
+const RATE_CAPACITY = Number(process.env.RATE_CAPACITY) || 120; // v3: 60 → 120 rpm
+const RATE_REFILL_PER_MS = RATE_CAPACITY / 60000; // refills continuously at RATE_CAPACITY/min
 const RATE_BUCKETS = new Map(); // hash -> { tokens, updated }
 const RATE_MAX_BUCKETS = 8192;
 
@@ -204,6 +204,7 @@ async function buildOwnResults(q) {
         authority: 0,
         rrf: 0,
         structure: 0,
+        proximity: titleHit ? 0.5 : 0, // v5: shape parity with aggregator
       },
       signals: {
         agreement: 1,
@@ -784,6 +785,9 @@ export function buildApp() {
     const body = await c.req.json().catch(() => ({}));
     const url = (body.url || "").trim();
     if (!isSafeUrl(url)) return c.json({ ok: false, error: "Invalid URL" }, 400);
+    // v3: refuse 18+ and gambling domains at the submit edge too, not just
+    // in the crawler. Keeps the submissions table clean from the start.
+    if (isNsfwUrl(url)) return c.json({ ok: false, error: "URL domain is blocked" }, 400);
     await addSubmission(url);
     // Kick an eager crawl so the submitted URL enters the Atomic index on
     // the next tick, and fire-and-forget a snapshot request so the GitHub

@@ -109,11 +109,16 @@ async function seedIfEmpty() {
 // a process-local LRU of "already enqueued" URLs so we avoid the DB
 // round-trip for the most common dupes.
 
-const CONCURRENCY = 12;
-const PER_HOST = 4;
-const PER_HOST_MIN_GAP_MS = 150;
-const LINKS_PER_PAGE = 50;
-const DEDUP_LRU_CAP = 80000;
+// Round-4 speed tuning. On free-tier Render these are the upper bounds
+// before we start seeing event-loop lag; going higher hurts more than it
+// helps because the single vCPU can't parse HTML fast enough.
+const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 32;
+const PER_HOST = Number(process.env.CRAWL_PER_HOST) || 8;
+const PER_HOST_MIN_GAP_MS = Number(process.env.CRAWL_HOST_GAP_MS) || 75;
+const LINKS_PER_PAGE = Number(process.env.CRAWL_LINKS_PER_PAGE) || 100;
+const DEDUP_LRU_CAP = 250000;
+const FETCH_TIMEOUT_MS = Number(process.env.CRAWL_TIMEOUT_MS) || 4000;
+const MAX_HTML_BYTES = 800_000;
 
 const dedupLru = new Set();
 function noteSeen(url) {
@@ -149,11 +154,11 @@ async function crawlTask(task) {
   hostLastFetch.set(host, Date.now());
   try {
     if (!isSafeUrl(url)) { await dropFromQueue(url).catch(() => {}); return; }
-    const res = await privateFetch(url, { timeout: 6000 });
+    const res = await privateFetch(url, { timeout: FETCH_TIMEOUT_MS });
     if (!res.ok) { await recordCrawlFailure(url, `HTTP ${res.status}`).catch(() => {}); return; }
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text/html")) { await dropFromQueue(url).catch(() => {}); return; }
-    const html = (await res.text()).slice(0, 500_000);
+    const html = (await res.text()).slice(0, MAX_HTML_BYTES);
     const { title, text, document } = extract(html, url);
     if (isNsfwText(title, text)) { await dropFromQueue(url).catch(() => {}); return; }
     await insertPage({ url: normaliseUrl(url), title, text, host });
@@ -197,6 +202,7 @@ export function startCrawler(intervalMs = 1000) {
   setTimeout(() => { seedIfEmpty().catch(() => {}); }, 2000).unref?.();
 
   let inFlight = 0;
+  let pumpErrors = 0; // v3: self-healing crash-loop guard
   const pump = async () => {
     while (inFlight < CONCURRENCY) {
       let task = null;
@@ -217,7 +223,35 @@ export function startCrawler(intervalMs = 1000) {
       crawlTask(task).finally(() => { inFlight -= 1; });
     }
   };
-  setInterval(() => { pump().catch(() => {}); }, intervalMs).unref?.();
+  setInterval(() => {
+    pump().catch((err) => {
+      // v3 self-healing: count pump-level crashes. If we hit a run of
+      // >10 in 60s, back off for a cooldown so we don't burn CPU in a
+      // tight crash loop. Resets on any healthy tick.
+      pumpErrors += 1;
+      if (pumpErrors > 10) {
+        console.error("[crawler] pump crash-loop, cooling down 30s:", err?.message || err);
+        pumpErrors = -30; // cool for ~30 ticks (~30s)
+      }
+    });
+    if (pumpErrors < 0) pumpErrors += 1; // bleed cool-down
+    if (pumpErrors === 0) pumpErrors = 0; // no-op clarity
+  }, intervalMs).unref?.();
+
+  // v3 self-healing: convert stray unhandled rejections in crawler paths
+  // into logged-and-forgotten. Previously one 429 without a catch could
+  // crash the Node process and drop the whole index.
+  process.on("unhandledRejection", (err) => {
+    if (!running) return;
+    const msg = err?.message || String(err);
+    // Only swallow obviously-network-y errors — real programming bugs
+    // should still crash in dev.
+    if (/ECONN|ENOTFOUND|timeout|fetch failed|HTTP \d/i.test(msg)) {
+      console.warn("[crawler] swallowed unhandled network rejection:", msg);
+      return;
+    }
+    // Let non-network rejections propagate.
+  });
 
   // Janitor: once an hour, re-enqueue pages we indexed more than 14 days ago
   // so the index self-refreshes.
