@@ -27,6 +27,15 @@ const DEFAULT_BRANCH = "atomic-search-index";
 const INDEX_FILE = "atomic.db";
 // Files the crawler might produce alongside the main DB (WAL/SHM).
 const SQLITE_COMPANIONS = ["atomic.db-wal", "atomic.db-shm"];
+// Stats artifact committed alongside the snapshot so the GitHub repo itself
+// shows the index growing over time (page count, queue depth) without needing
+// to download atomic.db. _Current_ stats live in index-stats.json; history is
+// appended to index-stats.history.jsonl (one JSON object per line).
+const STATS_FILE = "index-stats.json";
+const STATS_HISTORY_FILE = "index-stats.history.jsonl";
+// Cap the history file so the data branch doesn't grow without bound.
+// 4320 rows = 6 days at the default 2-minute interval.
+const STATS_HISTORY_MAX_LINES = 4320;
 
 let started = false;
 let syncing = false;
@@ -294,6 +303,23 @@ async function snapshotSize(workDir) {
   }
 }
 
+// Append one row to the stats history JSONL. Trims the file to the most
+// recent STATS_HISTORY_MAX_LINES entries so the data branch doesn't grow
+// unbounded over months.
+async function appendStatsHistory(workDir, snapshot) {
+  const file = path.join(workDir, STATS_HISTORY_FILE);
+  const line = JSON.stringify(snapshot) + "\n";
+  let existing = "";
+  try {
+    existing = await fsp.readFile(file, "utf8");
+  } catch {
+    // file doesn't exist yet — first push
+  }
+  const lines = (existing.split("\n").filter(Boolean)).concat([line.trimEnd()]);
+  const trimmed = lines.slice(-STATS_HISTORY_MAX_LINES);
+  await fsp.writeFile(file, trimmed.join("\n") + "\n", "utf8");
+}
+
 /**
  * Copies the live SQLite DB into the working clone and commits/pushes it.
  */
@@ -329,7 +355,38 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
       await copyIfExists(path.join(cfg.dataDir, f), path.join(workDir, f));
     }
 
-    await runGit(["add", INDEX_FILE, ...SQLITE_COMPANIONS], { cwd: workDir });
+    // Compute and write index-stats.json + append to history JSONL so the
+    // data branch tells the growth story without anyone having to download
+    // the SQLite DB.
+    let snapshot = null;
+    try {
+      const { stats } = await import("./storage.js");
+      const s = await stats();
+      snapshot = {
+        timestamp: new Date().toISOString(),
+        pages: s.pages || 0,
+        queue: s.queue || 0,
+        queueReady: s.queueReady || 0,
+        queueBackoff: s.queueBackoff || 0,
+        dead: s.dead || 0,
+        sessionAdded: s.added || 0,
+        snapshotBytes: liveStat.size,
+      };
+      await fsp.writeFile(
+        path.join(workDir, STATS_FILE),
+        JSON.stringify(snapshot, null, 2) + "\n",
+        "utf8"
+      );
+      await appendStatsHistory(workDir, snapshot);
+    } catch (err) {
+      // Don't let stats write failure block the snapshot push — the DB is
+      // the source of truth, not the stats file.
+      log("stats write failed:", err.message);
+    }
+
+    const filesToAdd = [INDEX_FILE, ...SQLITE_COMPANIONS];
+    if (snapshot) filesToAdd.push(STATS_FILE, STATS_HISTORY_FILE);
+    await runGit(["add", ...filesToAdd], { cwd: workDir });
     const status = await runGit(["status", "--porcelain"], { cwd: workDir });
     if (!status.stdout.trim()) {
       syncHealth.lastPushSkipped = "no-changes";
