@@ -55,8 +55,7 @@ async function tryLoadSqlite() {
     // cache keeps hot indexes in RAM, and memory-mapped I/O lets SQLite
     // page in pages as a memory region rather than reading each time.
     db.pragma("journal_mode = WAL");
-    db.pragma("synchronous = NORMAL");
-    db.pragma("cache_size = -20000");   // ~20 MB page cache
+    db.pragma("synchronous = db.pragma("cache_size = -64000");   // ~64 MB page cache
     db.pragma("temp_store = MEMORY");
     db.pragma("mmap_size = 134217728"); // 128 MB
     db.exec(`
