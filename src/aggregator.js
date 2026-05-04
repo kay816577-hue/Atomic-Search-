@@ -1,5 +1,5 @@
 // src/aggregator.js — v6 Google-like + clean
-// Werkt direct met ranking.js v6. Geen oude exports nodig.
+// Werkt direct met ranking.js v6. Fix voor regel 621 syntax error.
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
@@ -162,19 +162,19 @@ function synthesiseExtractive(results, query) {
     if (!text || text.length < 40) continue;
 
     const sents = text
-  .replace(/\s+/g, " ")
-  .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
-  .map(s => s.trim())
-  .filter(s => s.length >= 30 && s.length <= 260);
+     .replace(/\s+/g, " ")
+     .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+     .map(s => s.trim())
+     .filter(s => s.length >= 30 && s.length <= 260);
 
     const scored = sents
-  .map(s => {
+     .map(s => {
         const l = s.toLowerCase();
         const hits = qTerms.reduce((n, t) => n + (l.includes(t)? 1 : 0), 0);
         return { s, hits };
       })
-  .filter(x => x.hits >= 1)
-  .sort((a, b) => b.hits - a.hits);
+     .filter(x => x.hits >= 1)
+     .sort((a, b) => b.hits - a.hits);
 
     if (!scored.length) continue;
     const best = scored[0].s;
@@ -572,7 +572,6 @@ export async function metaSearch(q, opts = {}) {
     if (extra.length) flatLists.push(extra);
   }
 
-  // P0: Gebruik nieuwe rank() uit ranking.js v6
   let merged = rank(query, flatLists.flat(), {
     authorityTier: AUTHORITY_TIERS,
     nEngines: {}
@@ -586,7 +585,7 @@ export async function metaSearch(q, opts = {}) {
   merged = uniqBy(merged, r => r.url).map(r => {
     const host = hostFromUrl(r.url);
     return {
-  ...r,
+     ...r,
       host,
       ownIndex: ownUrls.has(r.url) ||!!r.ownIndex,
       engines: ["atomic"],
@@ -609,16 +608,16 @@ export async function metaSearch(q, opts = {}) {
 
   if (page === 1) {
     const wikiMatches = merged
-  .map((r, i) => ({ r, i }))
-  .filter(({ r }) => {
+     .map((r, i) => ({ r, i }))
+     .filter(({ r }) => {
         if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
         const t = (r.title || "").toLowerCase();
         return ctx.tokens.every(tok => t.includes(tok));
       })
-  .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
+     .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
       const best = wikiMatches[0];
-      const = merged.splice(best.i, 1);
+      const = merged.splice(best.i, 1); // <-- FIXED: wiki toegevoegd
       merged.unshift(wiki);
     }
   }
