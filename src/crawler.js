@@ -1,7 +1,7 @@
 // src/crawler.js — P0 FIXED VERSION
 // Fixes: CPU throttle, disk thrash, no WAL. Target: 18-20 pages/min on Render Free
 
-import { parseHTML } from "linkedom";
+Session import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags } from "./util.js";
 import {
   insertPage,
@@ -11,8 +11,13 @@ import {
   recordCrawlFailure,
   reenqueueStale,
   stats,
-  db // Nodig voor batch commits
+  getDb // was: db
 } from "./storage.js";
+import { isSafeUrl } from "./safeurl.js";
+import { isNsfwUrl, isNsfwText } from "./nsfw.js";
+
+let running = false;
+const db = getDb(); // voeg deze regel toe
 import { isSafeUrl } from "./safeurl.js";
 import { isNsfwUrl, isNsfwText } from "./nsfw.js";
 
