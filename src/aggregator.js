@@ -603,13 +603,13 @@ export async function metaSearch(q, opts = {}) {
 
   if (page === 1) {
     const wikiMatches = merged
-   .map((r, i) => ({ r, i }))
-   .filter(({ r }) => {
+  .map((r, i) => ({ r, i }))
+  .filter(({ r }) => {
         if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
         const t = (r.title || "").toLowerCase();
         return ctx.tokens.every(tok => t.includes(tok));
       })
-   .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
+  .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
 
     if (wikiMatches.length && wikiMatches[0].i > 0) {
       const best = wikiMatches[0];
