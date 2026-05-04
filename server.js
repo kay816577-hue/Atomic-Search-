@@ -17,7 +17,7 @@ import { buildApp } from "./src/app.js";
 import { startCrawler } from "./src/crawler.js";
 import { startIndexSync } from "./src/git_sync.js";
 
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 10000;
 
 // IMPORTANT: We must restore the SQLite snapshot from the data branch BEFORE
 // any request (or the crawler) is allowed to touch the DB. If a request
