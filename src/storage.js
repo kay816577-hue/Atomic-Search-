@@ -34,7 +34,7 @@ class LRU {
 }
 
 let sqlite = null;
-let db = null;
+export let db = null;
 
 async function tryLoadSqlite() {
   if (sqlite !== null) return sqlite;
