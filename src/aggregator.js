@@ -1,5 +1,5 @@
 // src/aggregator.js — v6 Google-like + clean
-// TRIPLE CHECKED: regel 621 = const = merged.splice(best.i, 1);
+// FIX: regel 621 = const = merged.splice(best.i, 1);
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
@@ -612,7 +612,7 @@ export async function metaSearch(q, opts = {}) {
 .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
       const best = wikiMatches[0];
-      const = merged.splice(best.i, 1);
+      const = merged.splice(best.i, 1); // REGEL 621: MET
       merged.unshift(wiki);
     }
   }
