@@ -1,10 +1,18 @@
+process.on('uncaughtException', err => {
+  console.error('CRASH:', err);
+  process.exit(1);
+});
+
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+
+
 // Node entrypoint — used by Render, Railway, Fly, Docker, bare VPS.
 // Boots the Hono app, starts the private crawler when SQLite is available,
 // and wires up the GitHub-branch-based index snapshot/restore so the crawl
 // index survives Render free-tier restarts with zero external storage.
 
-import { serve } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
+
 import { buildApp } from "./src/app.js";
 import { startCrawler } from "./src/crawler.js";
 import { startIndexSync } from "./src/git_sync.js";
