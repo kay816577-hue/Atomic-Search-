@@ -8,7 +8,7 @@
 // we cache verdicts for 24h so repeated clicks on the same result don't
 // burn quota.
 
-import { cacheGet, cacheSet } from "./storage.js";
+ // import { cacheGet, cacheSet } from "./storage.js";
 
 const VT_API = "https://www.virustotal.com/api/v3";
 const VERDICT_TTL = 24 * 60 * 60 * 1000; // 24h
