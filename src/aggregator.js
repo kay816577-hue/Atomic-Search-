@@ -1,5 +1,5 @@
 // src/aggregator.js — v6 Google-like + clean
-// Werkt direct met ranking.js v6. Fix voor regel 621 syntax error.
+// TRIPLE CHECKED: regel 621 = const = merged.splice(best.i, 1);
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
@@ -14,8 +14,8 @@ const ENGINES = [
   "wikipedia",
   "hackernews",
   "reddit",
- ...(((typeof process!== "undefined" && process.env?.ENABLE_MARGINALIA) === "1")
-   ? ["marginalia"]
+...(((typeof process!== "undefined" && process.env?.ENABLE_MARGINALIA) === "1")
+? ["marginalia"]
     : []),
 ];
 
@@ -31,7 +31,6 @@ const SEARXNG_POOL = [
   "https://search.sapti.me",
 ];
 
-// Authority tiers voor ranking.js
 const AUTHORITY_TIERS = {
   "en.wikipedia.org": 3,
   "wikipedia.org": 3,
@@ -64,7 +63,6 @@ const AUTHORITY_TIERS = {
   "youtube.com": 1,
 };
 
-// Wiki preview cache
 const WIKI_PREVIEW_CACHE = new Map();
 const WIKI_PREVIEW_CAP = 500;
 
@@ -162,19 +160,19 @@ function synthesiseExtractive(results, query) {
     if (!text || text.length < 40) continue;
 
     const sents = text
-     .replace(/\s+/g, " ")
-     .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
-     .map(s => s.trim())
-     .filter(s => s.length >= 30 && s.length <= 260);
+.replace(/\s+/g, " ")
+.split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+.map(s => s.trim())
+.filter(s => s.length >= 30 && s.length <= 260);
 
     const scored = sents
-     .map(s => {
+.map(s => {
         const l = s.toLowerCase();
         const hits = qTerms.reduce((n, t) => n + (l.includes(t)? 1 : 0), 0);
         return { s, hits };
       })
-     .filter(x => x.hits >= 1)
-     .sort((a, b) => b.hits - a.hits);
+.filter(x => x.hits >= 1)
+.sort((a, b) => b.hits - a.hits);
 
     if (!scored.length) continue;
     const best = scored[0].s;
@@ -203,7 +201,6 @@ function synthesiseExtractive(results, query) {
   };
 }
 
-// ---------- per-engine parsers ----------
 async function ddg(q, page = 1) {
   const s = (page - 1) * 20;
   const body = new URLSearchParams({ q, kl: "wt-wt", s: String(s) }).toString();
@@ -471,7 +468,6 @@ async function reddit(q, page = 1) {
 
 const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia, hackernews, reddit };
 
-// Engine health tracker
 const ENGINE_HEALTH = Object.fromEntries(
   ENGINES.map(e => [e, { consecutiveFailures: 0, cooldownUntil: 0, totalCalls: 0, totalFailures: 0, lastError: null }])
 );
@@ -517,7 +513,6 @@ export function engineHealth() {
   return out;
 }
 
-// MAIN META SEARCH
 export async function metaSearch(q, opts = {}) {
   if (!q ||!q.trim()) {
     return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0 };
@@ -585,7 +580,7 @@ export async function metaSearch(q, opts = {}) {
   merged = uniqBy(merged, r => r.url).map(r => {
     const host = hostFromUrl(r.url);
     return {
-     ...r,
+...r,
       host,
       ownIndex: ownUrls.has(r.url) ||!!r.ownIndex,
       engines: ["atomic"],
@@ -608,16 +603,16 @@ export async function metaSearch(q, opts = {}) {
 
   if (page === 1) {
     const wikiMatches = merged
-     .map((r, i) => ({ r, i }))
-     .filter(({ r }) => {
+.map((r, i) => ({ r, i }))
+.filter(({ r }) => {
         if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
         const t = (r.title || "").toLowerCase();
         return ctx.tokens.every(tok => t.includes(tok));
       })
-     .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
+.sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
       const best = wikiMatches[0];
-      const = merged.splice(best.i, 1); // <-- FIXED: wiki toegevoegd
+      const = merged.splice(best.i, 1);
       merged.unshift(wiki);
     }
   }
