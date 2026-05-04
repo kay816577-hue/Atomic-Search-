@@ -1,43 +1,11 @@
-// Meta-search aggregator. Queries several public search endpoints, merges
-// them with Reciprocal Rank Fusion, and presents results under Atomic's own
-// brand — we deliberately do NOT expose which upstream ranked each result.
-// All outbound requests are anonymous — no user-identifying headers.
+// src/aggregator.js — v6 Google-like + clean
+// Werkt direct met ranking.js v6. Geen oude exports nodig.
 
 import { parseHTML } from "linkedom";
 import { privateFetch, hostFromUrl, normaliseUrl, stripTags, uniqBy } from "./util.js";
 import { isNsfwResult, isNsfwText } from "./nsfw.js";
-import {
-  WEIGHTS,
-  buildQueryContext,
-  bm25Score,
-  titleMatchScore,
-  authorityScore,
-  structureScore,
-  agreementScore,
-  rrfNormalised,
-  proximityScore,
-  parkedDemote,
-  combineScore,
-  stripTitleBrand,
-} from "./ranking.js";
+import { rank, buildQueryContext } from "./ranking.js";
 
-// Internal engine ids are used only for RRF / debugging. They are never
-// leaked to the client (the /api/search response reports results as sourced
-// from "atomic" only).
-// Layered for coverage + privacy:
-//   - Startpage     : Google results through a privacy-preserving proxy
-//   - Brave         : independent index, great for recent / long-tail web
-//   - primary (Bing): broad corporate index with an opt-out locale pin
-//   - DuckDuckGo    : yet another Bing-flavoured view for agreement weight
-//   - Wikipedia     : reliable knowledge cards for entity queries
-//   - Hacker News   : tech / news discussion
-//   - Reddit        : real-user opinion for niche questions
-// Marginalia is available as a runner but disabled by default (its small-web
-// results kept landing on the first page for mainstream queries). Enable
-// via ENABLE_MARGINALIA=1 if you specifically want small-web coverage.
-// All engines are hit server-side with spoofed UA + no cookies → scraping
-// happens on the user's behalf with no identity leak. The growing Atomic
-// index fills in long-tail coverage across repeat searches.
 const ENGINES = [
   "startpage",
   "brave",
@@ -46,16 +14,13 @@ const ENGINES = [
   "wikipedia",
   "hackernews",
   "reddit",
-  ...(((typeof process !== "undefined" && process.env?.ENABLE_MARGINALIA) === "1")
-    ? ["marginalia"]
+ ...(((typeof process!== "undefined" && process.env?.ENABLE_MARGINALIA) === "1")
+   ? ["marginalia"]
     : []),
 ];
 
-// With more engines online we can drop per-engine pagination fan-out
-// slightly — we get more cross-source agreement instead of more pages.
 const ENGINE_PAGES_PER_META = 3;
 
-// Pool of public SearXNG instances — tried round-robin until one answers.
 const SEARXNG_POOL = [
   "https://searx.be",
   "https://searx.tiekoetter.com",
@@ -66,12 +31,8 @@ const SEARXNG_POOL = [
   "https://search.sapti.me",
 ];
 
-// Hosts we trust enough to give a small ranking boost to when they match
-// the query well. These aren't hard overrides — they're just priors that
-// nudge genuinely-relevant popular-site results above spammy lookalikes.
-// Tiered so e.g. Wikipedia outranks a forum even when both match equally.
-const POPULAR_HOSTS = {
-  // tier 3 — authoritative reference for the topic
+// Authority tiers voor ranking.js
+const AUTHORITY_TIERS = {
   "en.wikipedia.org": 3,
   "wikipedia.org": 3,
   "developer.mozilla.org": 3,
@@ -81,50 +42,32 @@ const POPULAR_HOSTS = {
   "cppreference.com": 3,
   "rust-lang.org": 3,
   "doc.rust-lang.org": 3,
-  "ecma-international.org": 3,
-  "whatwg.org": 3,
+  "kernel.org": 3,
   "w3.org": 3,
   "rfc-editor.org": 3,
-  "datatracker.ietf.org": 3,
-  "kernel.org": 3,
-  // tier 2 — broadly reliable technical / educational / newsy hubs
   "github.com": 2,
   "stackoverflow.com": 2,
   "stackexchange.com": 2,
   "arxiv.org": 2,
-  "wolframalpha.com": 2,
-  "archive.org": 2,
-  "britannica.com": 2,
-  "khanacademy.org": 2,
   "nature.com": 2,
   "science.org": 2,
   "nytimes.com": 2,
   "bbc.com": 2,
-  "bbc.co.uk": 2,
-  "theguardian.com": 2,
   "reuters.com": 2,
-  "apnews.com": 2,
-  "wsj.com": 2,
-  "economist.com": 2,
-  "ft.com": 2,
   "nasa.gov": 2,
   "who.int": 2,
   "cdc.gov": 2,
-  "nih.gov": 2,
-  // tier 1 — genuine community content
   "reddit.com": 1,
   "news.ycombinator.com": 1,
   "medium.com": 1,
   "dev.to": 1,
-  "quora.com": 1,
   "youtube.com": 1,
 };
 
-// Small LRU for Wikipedia REST-summary responses so hot queries don't
-// re-fetch the same articles. Keyed by canonical slug. Capped at 500
-// entries (≈ few MB); older keys evicted on overflow.
+// Wiki preview cache
 const WIKI_PREVIEW_CACHE = new Map();
 const WIKI_PREVIEW_CAP = 500;
+
 function wikiCacheGet(key) {
   if (!WIKI_PREVIEW_CACHE.has(key)) return null;
   const v = WIKI_PREVIEW_CACHE.get(key);
@@ -132,34 +75,28 @@ function wikiCacheGet(key) {
   WIKI_PREVIEW_CACHE.set(key, v);
   return v;
 }
+
 function wikiCacheSet(key, val) {
   if (WIKI_PREVIEW_CACHE.size >= WIKI_PREVIEW_CAP) {
     const oldest = WIKI_PREVIEW_CACHE.keys().next().value;
-    if (oldest !== undefined) WIKI_PREVIEW_CACHE.delete(oldest);
+    if (oldest!== undefined) WIKI_PREVIEW_CACHE.delete(oldest);
   }
   WIKI_PREVIEW_CACHE.set(key, val);
 }
 
-// Attach `preview = { source, text, thumbnail, title }` to every result.
-// Wikipedia previews come from the REST summary API (anonymous, keyless).
-// All fetches share a global budget so a slow Wikipedia doesn't delay the
-// whole page — we simply keep whatever completed.
 async function enrichPreviews(results) {
-  if (!Array.isArray(results) || !results.length) return;
+  if (!Array.isArray(results) ||!results.length) return;
 
-  // Seed non-wiki previews immediately from the existing snippet so even if
-  // the wiki batch times out, every card already has a usable preview.
   for (const r of results) {
     if (!r.snippet) continue;
     r.preview = {
-      source: r.ownIndex ? "Atomic index" : "Web snippet",
+      source: r.ownIndex? "Atomic index" : "Web snippet",
       title: r.title,
-      text: r.snippet.length > 360 ? r.snippet.slice(0, 360).trimEnd() + "…" : r.snippet,
+      text: r.snippet.length > 360? r.snippet.slice(0, 360).trimEnd() + "…" : r.snippet,
       thumbnail: null,
     };
   }
 
-  // Collect wiki targets.
   const wikiTargets = [];
   for (const r of results) {
     if (!/en\.wikipedia\.org\/wiki\//.test(r.url || "")) continue;
@@ -169,8 +106,6 @@ async function enrichPreviews(results) {
   }
   if (!wikiTargets.length) return;
 
-  // Fetch summaries in parallel, with a shared ~6s cap on the whole batch.
-  // Cache hits resolve instantly.
   const BUDGET_MS = 6000;
   const PER_REQ_MS = 3500;
   const started = Date.now();
@@ -196,7 +131,7 @@ async function enrichPreviews(results) {
           };
           wikiCacheSet(slug, payload);
           applyWikiPreview(r, payload);
-        } catch { /* tolerate individual failures */ }
+        } catch {}
       })
     ),
     new Promise((resolve) => setTimeout(resolve, BUDGET_MS)),
@@ -212,46 +147,11 @@ function applyWikiPreview(r, p) {
   };
 }
 
-function round3(x) {
-  if (!Number.isFinite(x)) return 0;
-  return Math.round(x * 1000) / 1000;
-}
-
-function popularHostBoost(url) {
-  try {
-    const h = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-    if (POPULAR_HOSTS[h]) return POPULAR_HOSTS[h];
-    // Allow matching on parent domains too (e.g. en.wikipedia.org hits the
-    // `wikipedia.org` entry if present).
-    for (const [host, tier] of Object.entries(POPULAR_HOSTS)) {
-      if (h.endsWith("." + host)) return tier;
-    }
-  } catch { /* ignore */ }
-  return 0;
-}
-
-// Fuse N ranked lists into one scored list using the ranking module.
-//
-// Every result's final `score` is a single weighted sum of named, bounded
-// sub-scores (see src/ranking.js for the formulae). Each sub-score is
-// unit-tested. Changing the mix is a one-line edit to WEIGHTS.
-//
-// Inputs:
-//   lists  : Array<Array<{ url, title, snippet, engine?, ownIndex? }>>
-//   query  : user query string
-// Output:
-//   Array<{ ...item, score, subScores, agreement, popTier, engines }>
-//   sorted by score descending.
-// Extractive summariser. Picks the best 2–4 sentences from the top
-// results and stitches them into a coherent paragraph. Deterministic,
-// local, no model — this is the "AI-free" answer block.
 function synthesiseExtractive(results, query) {
   const top = results.slice(0, 6);
-  const qTerms = (query || "")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((t) => t.length >= 3);
+  const qTerms = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
   if (!qTerms.length) return null;
+
   const sources = [];
   const seenHosts = new Set();
   const seenSentences = new Set();
@@ -260,38 +160,40 @@ function synthesiseExtractive(results, query) {
   for (const r of top) {
     const text = (r.preview?.text || r.snippet || r.text || "").trim();
     if (!text || text.length < 40) continue;
-    // Split into sentences on ". ", "! ", "? ". Keep reasonably-sized ones.
+
     const sents = text
-      .replace(/\s+/g, " ")
-      .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 30 && s.length <= 260);
-    // Score each sentence by how many query terms it mentions.
+  .replace(/\s+/g, " ")
+  .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+  .map(s => s.trim())
+  .filter(s => s.length >= 30 && s.length <= 260);
+
     const scored = sents
-      .map((s) => {
+  .map(s => {
         const l = s.toLowerCase();
-        const hits = qTerms.reduce((n, t) => n + (l.includes(t) ? 1 : 0), 0);
+        const hits = qTerms.reduce((n, t) => n + (l.includes(t)? 1 : 0), 0);
         return { s, hits };
       })
-      .filter((x) => x.hits >= 1)
-      .sort((a, b) => b.hits - a.hits);
+  .filter(x => x.hits >= 1)
+  .sort((a, b) => b.hits - a.hits);
+
     if (!scored.length) continue;
     const best = scored[0].s;
-    // Dedup by near-equal prefixes so the answer doesn't repeat.
     const key = best.slice(0, 60).toLowerCase();
     if (seenSentences.has(key)) continue;
     seenSentences.add(key);
     picked.push(best);
+
     if (!seenHosts.has(r.host)) {
       seenHosts.add(r.host);
       sources.push({ host: r.host, url: r.url, title: r.title });
     }
     if (picked.length >= 3) break;
   }
-  if (!picked.length) return null;
 
+  if (!picked.length) return null;
   let text = picked.join(" ");
   if (text.length > 450) text = text.slice(0, 447) + "…";
+
   return {
     source: "Atomic synthesis",
     title: query,
@@ -301,80 +203,7 @@ function synthesiseExtractive(results, query) {
   };
 }
 
-function rankBlend(lists, query = "") {
-  const ctx = buildQueryContext(query);
-
-  // Pass 1: accumulate raw RRF + source set + first-seen item per URL.
-  const K_RRF = 60;
-  const rrfRaw = new Map();
-  const sources = new Map();
-  const items = new Map();
-  for (const list of lists) {
-    list.forEach((item, idx) => {
-      const key = normaliseUrl(item.url);
-      if (!key) return;
-      rrfRaw.set(key, (rrfRaw.get(key) || 0) + 1 / (K_RRF + idx + 1));
-      const set = sources.get(key) || new Set();
-      if (item.engine) set.add(item.engine);
-      sources.set(key, set);
-      if (!items.has(key)) items.set(key, { ...item, url: key });
-    });
-  }
-  const rrfMax = Math.max(0, ...rrfRaw.values());
-
-  // Pass 2: compute sub-scores + combined score for each unique item.
-  const merged = [...items.values()].map((it) => {
-    const srcs = sources.get(it.url) || new Set();
-    const popTier = popularHostBoost(it.url);
-    const subScores = {
-      bm25: bm25Score(it, ctx),
-      titleMatch: titleMatchScore(it, ctx),
-      agreement: agreementScore(srcs.size),
-      authority: authorityScore(popTier),
-      rrf: rrfNormalised(rrfRaw.get(it.url) || 0, rrfMax),
-      structure: structureScore(it.url, ctx),
-      proximity: proximityScore(it, ctx),
-    };
-    // Exact-host-root boost: if a query token equals the registrable
-    // domain root (e.g. query has "kernel" and url is `kernel.org`), the
-    // site is almost certainly THE canonical source for the topic.
-    // Surface it with a small titleMatch lift, not a new weight, so the
-    // scoring math stays legible and the weights still sum to 1.
-    try {
-      const host = new URL(it.url).hostname.replace(/^www\./, "").toLowerCase();
-      const root = host.split(".").slice(-2)[0] || host;
-      if (ctx.tokens.some((t) => t === root && t.length >= 3)) {
-        subScores.titleMatch = Math.min(1, subScores.titleMatch + 0.15);
-      }
-    } catch { /* ignore */ }
-
-    // v5: parked-host demotion subtracts up to 0.35 from the final score.
-    const demote = parkedDemote(it.host);
-    const score = Math.max(0, combineScore(subScores) - demote);
-    // Tiny URL-depth tiebreaker (no weight changes): shorter paths win
-    // when everything else is equal. Bounded at +0.02.
-    let depthBonus = 0;
-    try {
-      const u = new URL(it.url);
-      const depth = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean).length;
-      depthBonus = Math.max(0, (4 - depth)) * 0.005;
-    } catch { /* ignore */ }
-    return {
-      ...it,
-      score: Math.min(1, score + depthBonus),
-      subScores,
-      engines: Array.from(srcs),
-      agreement: srcs.size,
-      popTier,
-    };
-  });
-
-  merged.sort((a, b) => b.score - a.score);
-  return merged;
-}
-
 // ---------- per-engine parsers ----------
-
 async function ddg(q, page = 1) {
   const s = (page - 1) * 20;
   const body = new URLSearchParams({ q, kl: "wt-wt", s: String(s) }).toString();
@@ -388,8 +217,8 @@ async function ddg(q, page = 1) {
   if (/anomaly-modal|Unusual activity/i.test(html)) return [];
   const { document } = parseHTML(html);
   const out = [];
-  for (const r of document.querySelectorAll(".result, .web-result")) {
-    const a = r.querySelector("a.result__a, .result__title a, h2 a");
+  for (const r of document.querySelectorAll(".result,.web-result")) {
+    const a = r.querySelector("a.result__a,.result__title a, h2 a");
     if (!a) continue;
     let href = a.getAttribute("href") || "";
     try {
@@ -397,12 +226,10 @@ async function ddg(q, page = 1) {
         const u = new URL(href, "https://duckduckgo.com");
         href = u.searchParams.get("uddg") || href;
       }
-    } catch { /* ignore */ }
+    } catch {}
     const title = stripTags(a.textContent || "");
-    const snippet = stripTags(
-      r.querySelector(".result__snippet, .result__body")?.textContent || ""
-    );
-    if (!href?.startsWith("http") || !title) continue;
+    const snippet = stripTags(r.querySelector(".result__snippet,.result__body")?.textContent || "");
+    if (!href?.startsWith("http") ||!title) continue;
     out.push({ url: href, title, snippet, engine: "ddg" });
     if (out.length >= 25) break;
   }
@@ -412,27 +239,20 @@ async function ddg(q, page = 1) {
 function decodeBingRedirect(href) {
   try {
     const u = new URL(href);
-    if (!u.hostname.endsWith("bing.com") || !u.pathname.startsWith("/ck/a")) return href;
+    if (!u.hostname.endsWith("bing.com") ||!u.pathname.startsWith("/ck/a")) return href;
     const enc = u.searchParams.get("u");
     if (!enc) return href;
     const b64 = enc.replace(/^a1/, "").replace(/-/g, "+").replace(/_/g, "/");
-    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
-    const decoded = typeof atob === "function"
-      ? atob(b64 + pad)
-      : Buffer.from(b64 + pad, "base64").toString("utf8");
+    const pad = b64.length % 4? "=".repeat(4 - (b64.length % 4)) : "";
+    const decoded = typeof atob === "function"? atob(b64 + pad) : Buffer.from(b64 + pad, "base64").toString("utf8");
     if (/^https?:\/\//i.test(decoded)) return decoded;
-  } catch { /* ignore */ }
+  } catch {}
   return href;
 }
 
 async function primary(q, page = 1) {
-  // Bing HTML — force English US locale so results are useful regardless of
-  // the server's geolocation (Cloudflare / Render datacenters sometimes
-  // geolocate oddly). `mkt`, `cc`, `setlang` together pin it.
   const first = (page - 1) * 10 + 1;
-  const url =
-    `https://www.bing.com/search?q=${encodeURIComponent(q)}` +
-    `&first=${first}&mkt=en-US&setlang=en-US&cc=US&form=QBLH`;
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(q)}&first=${first}&mkt=en-US&setlang=en-US&cc=US&form=QBLH`;
   const res = await privateFetch(url, {
     headers: {
       "Accept-Language": "en-US,en;q=0.9",
@@ -449,13 +269,9 @@ async function primary(q, page = 1) {
     let href = a.getAttribute("href") || "";
     href = decodeBingRedirect(href);
     const title = stripTags(a.textContent || "");
-    const snippet = stripTags(
-      li.querySelector(".b_caption p")?.textContent || li.querySelector("p")?.textContent || ""
-    );
-    if (!href.startsWith("http") || !title) continue;
-    // Drop obvious Chinese-language leaked results (happens when Bing
-    // ignores our locale hints).
-    if (/[\u4E00-\u9FFF]/.test(title) && !/[a-z]{4}/i.test(title)) continue;
+    const snippet = stripTags(li.querySelector(".b_caption p")?.textContent || li.querySelector("p")?.textContent || "");
+    if (!href.startsWith("http") ||!title) continue;
+    if (/[\u4E00-\u9FFF]/.test(title) &&!/[a-z]{4}/i.test(title)) continue;
     out.push({ url: href, title, snippet, engine: "primary" });
     if (out.length >= 25) break;
   }
@@ -464,70 +280,36 @@ async function primary(q, page = 1) {
 
 async function brave(q, page = 1) {
   const offset = (page - 1) * 10;
-  const url =
-    `https://search.brave.com/search?q=${encodeURIComponent(q)}` +
-    `&source=web&offset=${offset}&spellcheck=0&safesearch=moderate`;
-  // Brave occasionally 429s scrapers — if so, we already catch 4xx below and
-  // let the self-healing engine tracker shove it into cooldown.
+  const url = `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web&offset=${offset}&spellcheck=0&safesearch=moderate`;
   const res = await privateFetch(url, {
-    headers: {
-      Referer: "https://search.brave.com/",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
+    headers: { Referer: "https://search.brave.com/", "Accept-Language": "en-US,en;q=0.9" },
     timeout: 8000,
   });
   if (res.status >= 400) return [];
   const html = await res.text();
-  // Brave's "press continue" interstitial when bot-detection trips.
   if (/bot[- ]?protection|captcha|challenge/i.test(html)) return [];
   const { document } = parseHTML(html);
   const out = [];
-  // Layout has drifted over time: try the snippet/result containers first
-  // (they pin one link per result → better snippet extraction), then fall
-  // back to a link-scan.
-  const containers = document.querySelectorAll(
-    "[data-type='web'], .snippet, #results .snippet, article.snippet, .result"
-  );
+  const containers = document.querySelectorAll("[data-type='web'],.snippet, #results.snippet, article.snippet,.result");
   const seen = new Set();
   for (const c of containers) {
-    const a =
-      c.querySelector("a.result-header, a.h, .snippet-title a, a[href^='http']");
+    const a = c.querySelector("a.result-header, a.h,.snippet-title a, a[href^='http']");
     if (!a) continue;
     const href = a.getAttribute("href") || "";
     if (!href.startsWith("http") || seen.has(href)) continue;
-    const title = stripTags(
-      c.querySelector(".snippet-title, .title, h2, h3, .result-header")
-        ?.textContent || a.textContent || ""
-    );
+    const title = stripTags(c.querySelector(".snippet-title,.title, h2, h3,.result-header")?.textContent || a.textContent || "");
     if (!title) continue;
     seen.add(href);
-    const snippet = stripTags(
-      c.querySelector(".snippet-description, .snippet-content, .description, p")
-        ?.textContent || ""
-    );
+    const snippet = stripTags(c.querySelector(".snippet-description,.snippet-content,.description, p")?.textContent || "");
     out.push({ url: href, title, snippet, engine: "brave" });
     if (out.length >= 25) break;
-  }
-  if (out.length === 0) {
-    // Fallback: broad link scan when selectors haven't matched anything.
-    for (const a of document.querySelectorAll("a[href^='http']")) {
-      const href = a.getAttribute("href") || "";
-      if (!href.startsWith("http") || seen.has(href)) continue;
-      if (/search\.brave\.com|brave\.com\//.test(href)) continue;
-      const title = stripTags(a.textContent || "");
-      if (!title || title.length < 6) continue;
-      seen.add(href);
-      out.push({ url: href, title, snippet: "", engine: "brave" });
-      if (out.length >= 20) break;
-    }
   }
   return out;
 }
 
-// Try SearXNG instances in order until one returns JSON results.
 async function searxng(q, page = 1) {
-  const configured = (typeof process !== "undefined" && process.env?.SEARXNG_URL) || "";
-  const pool = configured ? [configured, ...SEARXNG_POOL] : SEARXNG_POOL;
+  const configured = (typeof process!== "undefined" && process.env?.SEARXNG_URL) || "";
+  const pool = configured? [configured,...SEARXNG_POOL] : SEARXNG_POOL;
   for (const base of pool) {
     try {
       const res = await privateFetch(
@@ -536,69 +318,43 @@ async function searxng(q, page = 1) {
       );
       if (!res.ok) continue;
       const data = await res.json().catch(() => null);
-      if (!data || !Array.isArray(data.results) || !data.results.length) continue;
+      if (!data ||!Array.isArray(data.results) ||!data.results.length) continue;
       const out = [];
       for (const r of data.results) {
-        if (!r.url || !r.title) continue;
-        out.push({
-          url: r.url,
-          title: stripTags(r.title),
-          snippet: stripTags(r.content || ""),
-          engine: "searxng",
-        });
+        if (!r.url ||!r.title) continue;
+        out.push({ url: r.url, title: stripTags(r.title), snippet: stripTags(r.content || ""), engine: "searxng" });
         if (out.length >= 25) break;
       }
       if (out.length) return out;
-    } catch { /* try next */ }
+    } catch {}
   }
   return [];
 }
 
-// Startpage — proxies Google anonymously, free and open. HTML has CSS-ish
-// class-based markup we can parse.
 async function startpage(q, page = 1) {
   try {
     const res = await privateFetch(
       `https://www.startpage.com/do/search?q=${encodeURIComponent(q)}&cat=web&pl=opensearch&page=${page}`,
-      {
-        headers: {
-          "Accept-Language": "en-US,en;q=0.9",
-          Referer: "https://www.startpage.com/",
-        },
-        timeout: 8000,
-      }
+      { headers: { "Accept-Language": "en-US,en;q=0.9", Referer: "https://www.startpage.com/" }, timeout: 8000 }
     );
     if (!res.ok) return [];
     const html = await res.text();
     if (/captcha|anti-?bot|anomaly/i.test(html)) return [];
     const { document } = parseHTML(html);
     const out = [];
-    const selectors = [
-      "section.w-gl__result",
-      ".w-gl__result",
-      "article.result",
-      ".result",
-      "section.result",
-      "[data-testid='result']",
-    ];
+    const selectors = ["section.w-gl__result", ".w-gl__result", "article.result", ".result", "section.result", "[data-testid='result']"];
     let nodes = [];
     for (const sel of selectors) {
       nodes = [...document.querySelectorAll(sel)];
       if (nodes.length) break;
     }
     for (const n of nodes) {
-      const a =
-        n.querySelector("a.w-gl__result-title") ||
-        n.querySelector("a.result-link") ||
-        n.querySelector("h3 a, h2 a") ||
-        n.querySelector("a[href^='http']");
+      const a = n.querySelector("a.w-gl__result-title") || n.querySelector("a.result-link") || n.querySelector("h3 a, h2 a") || n.querySelector("a[href^='http']");
       if (!a) continue;
       const href = a.getAttribute("href") || "";
       if (!href.startsWith("http")) continue;
       const title = stripTags(a.textContent || "");
-      const snippet = stripTags(
-        n.querySelector(".w-gl__description, .description, p")?.textContent || ""
-      );
+      const snippet = stripTags(n.querySelector(".w-gl__description,.description, p")?.textContent || "");
       if (!title) continue;
       out.push({ url: href, title, snippet, engine: "startpage" });
       if (out.length >= 25) break;
@@ -609,9 +365,8 @@ async function startpage(q, page = 1) {
   }
 }
 
-// Wikipedia OpenSearch — always-available, reliable knowledge source.
 async function wikipedia(q, page = 1) {
-  if (page > 1) return []; // OpenSearch doesn't paginate
+  if (page > 1) return [];
   try {
     const res = await privateFetch(
       `https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=20&namespace=0&search=${encodeURIComponent(q)}`,
@@ -623,13 +378,8 @@ async function wikipedia(q, page = 1) {
     const [, titles, snippets, urls] = data;
     const out = [];
     for (let i = 0; i < titles.length; i++) {
-      if (!urls[i] || !titles[i]) continue;
-      out.push({
-        url: urls[i],
-        title: titles[i],
-        snippet: snippets[i] || "",
-        engine: "wikipedia",
-      });
+      if (!urls[i] ||!titles[i]) continue;
+      out.push({ url: urls[i], title: titles[i], snippet: snippets[i] || "", engine: "wikipedia" });
     }
     return out;
   } catch {
@@ -637,18 +387,14 @@ async function wikipedia(q, page = 1) {
   }
 }
 
-// Marginalia — small-web / independent sites. Their HTML is simple.
 async function marginalia(q, page = 1) {
   try {
-    const res = await privateFetch(
-      `https://search.marginalia.nu/search?query=${encodeURIComponent(q)}&profile=no-js&page=${page}`,
-      { timeout: 6000 }
-    );
+    const res = await privateFetch(`https://search.marginalia.nu/search?query=${encodeURIComponent(q)}&profile=no-js&page=${page}`, { timeout: 6000 });
     if (!res.ok) return [];
     const html = await res.text();
     const { document } = parseHTML(html);
     const out = [];
-    for (const sec of document.querySelectorAll("section.card.search-result, section.search-result, .card.search-result")) {
+    for (const sec of document.querySelectorAll("section.card.search-result, section.search-result,.card.search-result")) {
       const a = sec.querySelector("h2 a, a.title, a");
       if (!a) continue;
       const href = a.getAttribute("href") || "";
@@ -665,27 +411,22 @@ async function marginalia(q, page = 1) {
   }
 }
 
-// Hacker News — Algolia-powered public JSON API, no key needed. Broad
-// tech/news/discussion coverage that Startpage often misses.
 async function hackernews(q, page = 1) {
-  if (page > 1) return []; // one page is enough — we only keep top 15 anyway
+  if (page > 1) return [];
   try {
-    const res = await privateFetch(
-      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=15`,
-      { headers: { Accept: "application/json" }, timeout: 6000 }
-    );
+    const res = await privateFetch(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&hitsPerPage=15`, { headers: { Accept: "application/json" }, timeout: 6000 });
     if (!res.ok) return [];
     const data = await res.json().catch(() => null);
-    if (!data || !Array.isArray(data.hits)) return [];
+    if (!data ||!Array.isArray(data.hits)) return [];
     const out = [];
     for (const h of data.hits) {
-      const url = h.url || (h.objectID ? `https://news.ycombinator.com/item?id=${h.objectID}` : null);
+      const url = h.url || (h.objectID? `https://news.ycombinator.com/item?id=${h.objectID}` : null);
       const title = (h.title || "").trim();
-      if (!url || !title) continue;
+      if (!url ||!title) continue;
       out.push({
         url,
         title,
-        snippet: (h.story_text || "").replace(/<[^>]+>/g, "").slice(0, 280) || `Hacker News \u00b7 ${h.points || 0} points \u00b7 ${h.num_comments || 0} comments`,
+        snippet: (h.story_text || "").replace(/<[^>]+>/g, "").slice(0, 280) || `Hacker News · ${h.points || 0} points · ${h.num_comments || 0} comments`,
         engine: "hackernews",
       });
       if (out.length >= 15) break;
@@ -696,20 +437,12 @@ async function hackernews(q, page = 1) {
   }
 }
 
-// Reddit — public JSON search API, no key needed. Great for real-user
-// opinions and niche questions. We ask for relevance and limit to 15.
 async function reddit(q, page = 1) {
   if (page > 1) return [];
   try {
     const res = await privateFetch(
       `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=relevance&limit=15&t=all&raw_json=1`,
-      {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "atomic-search/1.0 (private metasearch)",
-        },
-        timeout: 6000,
-      }
+      { headers: { Accept: "application/json", "User-Agent": "atomic-search/1.0 (private metasearch)" }, timeout: 6000 }
     );
     if (!res.ok) return [];
     const data = await res.json().catch(() => null);
@@ -719,13 +452,13 @@ async function reddit(q, page = 1) {
     for (const c of children) {
       const d = c?.data;
       if (!d) continue;
-      const permalink = d.permalink ? `https://www.reddit.com${d.permalink}` : null;
+      const permalink = d.permalink? `https://www.reddit.com${d.permalink}` : null;
       const title = (d.title || "").trim();
-      if (!permalink || !title) continue;
+      if (!permalink ||!title) continue;
       out.push({
         url: permalink,
         title,
-        snippet: (d.selftext || "").slice(0, 280) || `r/${d.subreddit || "reddit"} \u00b7 ${d.score || 0} upvotes \u00b7 ${d.num_comments || 0} comments`,
+        snippet: (d.selftext || "").slice(0, 280) || `r/${d.subreddit || "reddit"} · ${d.score || 0} upvotes · ${d.num_comments || 0} comments`,
         engine: "reddit",
       });
       if (out.length >= 15) break;
@@ -738,21 +471,16 @@ async function reddit(q, page = 1) {
 
 const RUNNERS = { primary, ddg, brave, startpage, searxng, wikipedia, marginalia, hackernews, reddit };
 
-// ---------- Self-healing engine tracker ----------
-// Every engine has an independent failure budget. Three consecutive failures
-// (exception OR empty result) puts it in a 5-minute cooldown where we skip
-// the HTTP call entirely. A single success resets it. This keeps the UI
-// snappy when one upstream is flaky without permanently losing coverage.
+// Engine health tracker
 const ENGINE_HEALTH = Object.fromEntries(
-  ENGINES.map((e) => [e, { consecutiveFailures: 0, cooldownUntil: 0, totalCalls: 0, totalFailures: 0, lastError: null }])
+  ENGINES.map(e => [e, { consecutiveFailures: 0, cooldownUntil: 0, totalCalls: 0, totalFailures: 0, lastError: null }])
 );
 const FAILURE_LIMIT = 3;
 const COOLDOWN_MS = 5 * 60 * 1000;
 
 function engineReady(engine) {
   const h = ENGINE_HEALTH[engine];
-  if (!h) return true;
-  return Date.now() >= h.cooldownUntil;
+  return!h || Date.now() >= h.cooldownUntil;
 }
 
 function recordEngineResult(engine, ok, err) {
@@ -766,10 +494,10 @@ function recordEngineResult(engine, ok, err) {
   }
   h.consecutiveFailures += 1;
   h.totalFailures += 1;
-  h.lastError = err ? String(err).slice(0, 160) : "empty";
+  h.lastError = err? String(err).slice(0, 160) : "empty";
   if (h.consecutiveFailures >= FAILURE_LIMIT) {
     h.cooldownUntil = Date.now() + COOLDOWN_MS;
-    h.consecutiveFailures = 0; // reset so it tries again after cooldown
+    h.consecutiveFailures = 0;
   }
 }
 
@@ -782,38 +510,31 @@ export function engineHealth() {
       cooldownMsLeft: Math.max(0, h.cooldownUntil - now),
       totalCalls: h.totalCalls,
       totalFailures: h.totalFailures,
-      successRate: h.totalCalls
-        ? Math.round(((h.totalCalls - h.totalFailures) / h.totalCalls) * 1000) / 10
-        : null,
+      successRate: h.totalCalls? Math.round(((h.totalCalls - h.totalFailures) / h.totalCalls) * 1000) / 10 : null,
       lastError: h.lastError,
     };
   }
   return out;
 }
 
+// MAIN META SEARCH
 export async function metaSearch(q, opts = {}) {
-  if (!q || !q.trim()) {
+  if (!q ||!q.trim()) {
     return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0 };
   }
-  // Refuse adult-intent queries up front. Nothing is even dispatched to
-  // upstream engines. Callers can see `filtered: true` on the response.
   if (isNsfwText(q)) {
     return { results: [], query: q, page: 1, perPage: 0, hasMore: false, total: 0, filtered: true };
   }
+
   const query = q.trim().slice(0, 256);
   const page = Math.max(1, Number(opts.page) || 1);
   const pagesPerEngine = Math.max(1, Math.min(5, Number(opts.pagesPerEngine) || ENGINE_PAGES_PER_META));
   const perPage = Math.max(10, Math.min(200, Number(opts.perPage) || 100));
-  // Optional: additional ranked lists from OTHER sources (e.g. our own
-  // SQLite-indexed pages) that should be fused in via RRF. The caller
-  // passes these as `extraLists: [[item,…], …]`. They get the same RRF
-  // treatment as the public engines, so a strong atomic-index hit can
-  // naturally rank ABOVE weak meta results.
-  const extraLists = Array.isArray(opts.extraLists) ? opts.extraLists.filter(Array.isArray) : [];
+  const extraLists = Array.isArray(opts.extraLists)? opts.extraLists.filter(Array.isArray) : [];
 
   const jobs = [];
   for (const engine of ENGINES) {
-    if (!engineReady(engine)) continue; // cooldown — skip this engine entirely
+    if (!engineReady(engine)) continue;
     const run = RUNNERS[engine];
     for (let i = 0; i < pagesPerEngine; i++) {
       const enginePage = (page - 1) * pagesPerEngine + (i + 1);
@@ -821,25 +542,20 @@ export async function metaSearch(q, opts = {}) {
         engine,
         enginePage,
         promise: run(query, enginePage).then(
-          (list) => ({ ok: true, list }),
-          (err) => ({ ok: false, err, list: [] })
+          list => ({ ok: true, list }),
+          err => ({ ok: false, err, list: [] })
         ),
       });
     }
   }
-  const resolved = await Promise.allSettled(jobs.map((j) => j.promise));
 
+  const resolved = await Promise.allSettled(jobs.map(j => j.promise));
   const perEngineLists = {};
-  const perEngineStatus = {};
   jobs.forEach((job, idx) => {
     const s = resolved[idx];
-    const payload = s.status === "fulfilled" ? s.value : { ok: false, list: [] };
+    const payload = s.status === "fulfilled"? s.value : { ok: false, list: [] };
     const list = payload.list || [];
     (perEngineLists[job.engine] = perEngineLists[job.engine] || []).push({ enginePage: job.enginePage, list });
-    perEngineStatus[job.engine] = perEngineStatus[job.engine] || { count: 0 };
-    if (list.length) perEngineStatus[job.engine].count += list.length;
-    // Record ONE outcome per engine per call (use the first page's result so
-    // an engine isn't penalised 3x for being down).
     if (job.enginePage === (page - 1) * pagesPerEngine + 1) {
       recordEngineResult(job.engine, payload.ok && list.length > 0, payload.err);
     }
@@ -852,112 +568,61 @@ export async function metaSearch(q, opts = {}) {
     for (const { list } of pages) flat.push(...list);
     if (flat.length) flatLists.push(flat);
   }
-  // Fuse our own-index ranked list(s) in as additional "engines" so strong
-  // Atomic hits can outrank weak meta hits via the same RRF math. The
-  // caller is responsible for pre-filtering these to high-confidence rows.
   for (const extra of extraLists) {
     if (extra.length) flatLists.push(extra);
   }
 
-  let merged = rankBlend(flatLists, query);
-  // Preserve the `ownIndex` flag when it's present (so the UI can badge it).
+  // P0: Gebruik nieuwe rank() uit ranking.js v6
+  let merged = rank(query, flatLists.flat(), {
+    authorityTier: AUTHORITY_TIERS,
+    nEngines: {}
+  });
+
   const ownUrls = new Set();
   for (const extra of extraLists) {
     for (const r of extra) if (r?.url) ownUrls.add(normaliseUrl(r.url));
   }
-  const ctx = buildQueryContext(query);
-  const qTokens = ctx.tokens;
-  const effTokens = qTokens;
-  const phrase = ctx.phrase;
-  // Each result carries:
-  //   - `score`         : combined score (0..1), monotone in quality
-  //   - `subScores`     : per-signal 0..1 components, for diagnostics
-  //   - `signals`       : human-friendly flags derived from subScores
-  //                       (same information, easier for the UI to render)
-  merged = uniqBy(merged, (r) => r.url).map((r) => {
-    const titleLc = stripTitleBrand((r.title || "").toLowerCase());
-    const sub = r.subScores || {};
-    const signals = {
-      agreement: r.agreement || 1,
-      popularHostTier: r.popTier || 0,
-      ownIndex: ownUrls.has(r.url) || !!r.ownIndex,
-      titleExact: phrase.length >= 3 && titleLc === phrase,
-      titlePrefix: phrase.length >= 3 && (titleLc.startsWith(phrase + " ") || titleLc.startsWith(phrase + ":")),
-      homepage: (sub.structure || 0) >= 1,
-      keywordCoverage: qTokens.length
-        ? Math.round((qTokens.reduce((n, t) => n + (titleLc.includes(t) ? 1 : 0), 0) / qTokens.length) * 100) / 100
-        : 0,
-    };
+
+  merged = uniqBy(merged, r => r.url).map(r => {
+    const host = hostFromUrl(r.url);
     return {
-      url: r.url,
-      host: hostFromUrl(r.url),
-      title: r.title,
-      snippet: r.snippet,
-      // Single, branded source — never leak the upstream engine id.
+  ...r,
+      host,
+      ownIndex: ownUrls.has(r.url) ||!!r.ownIndex,
       engines: ["atomic"],
-      ownIndex: signals.ownIndex,
-      score: Math.round(r.score * 1000) / 1000,
-      subScores: {
-        bm25: round3(sub.bm25),
-        titleMatch: round3(sub.titleMatch),
-        agreement: round3(sub.agreement),
-        authority: round3(sub.authority),
-        rrf: round3(sub.rrf),
-        structure: round3(sub.structure),
-        proximity: round3(sub.proximity),
-      },
-      signals,
     };
   });
-  // Defense-in-depth NSFW filter. Even though the search endpoint also
-  // filters, upstream engines occasionally leak adult content on otherwise
-  // innocent queries — strip them here too.
-  merged = merged.filter((r) => !isNsfwResult(r));
 
-  // Relevance filter: for multi-token queries, drop results where NEITHER
-  // the title nor the snippet covers enough of the query. This kills the
-  // "fishing raft" results for "raft consensus algorithm" problem —
-  // upstream engines sometimes return pages that only share one word
-  // with the query. Atomic-index rows and Wikipedia articles are exempt
-  // (they're already strongly-matched signals).
-  if (effTokens.length >= 2) {
-    const minCoverage = 0.5; // must match at least half the meaningful tokens
-    merged = merged.filter((r) => {
+  merged = merged.filter(r =>!isNsfwResult(r));
+
+  const ctx = buildQueryContext(query);
+  if (ctx.tokens.length >= 2) {
+    const minCoverage = 0.5;
+    merged = merged.filter(r => {
       if (r.ownIndex) return true;
       if (/en\.wikipedia\.org\/wiki\//.test(r.url)) return true;
-      const title = (r.title || "").toLowerCase();
-      const snip = (r.snippet || "").toLowerCase();
-      const hay = title + " " + snip;
-      const hits = effTokens.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0);
-      return hits / effTokens.length >= minCoverage;
+      const text = (r.title + " " + (r.snippet || "")).toLowerCase();
+      const hits = ctx.tokens.reduce((n, t) => n + (text.includes(t)? 1 : 0), 0);
+      return hits / ctx.tokens.length >= minCoverage;
     });
   }
 
-  // Knowledge-card promotion: if Wikipedia returned an article whose title
-  // looks like it's ABOUT the query (i.e. contains every query token), hoist
-  // it to position 0. Among multiple matches we pick the SHORTEST title —
-  // "Linux kernel" beats "Linux kernel version history" beats
-  // "Linux kernel mailing list". Only triggers on page 1 so paged results
-  // aren't reshuffled.
   if (page === 1) {
     const wikiMatches = merged
-      .map((r, i) => ({ r, i }))
-      .filter(({ r }) => {
+  .map((r, i) => ({ r, i }))
+  .filter(({ r }) => {
         if (!/en\.wikipedia\.org\/wiki\//.test(r.url)) return false;
         const t = (r.title || "").toLowerCase();
-        return qTokens.every((tok) => t.includes(tok));
+        return ctx.tokens.every(tok => t.includes(tok));
       })
-      .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
+  .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
       const best = wikiMatches[0];
-      const [wiki] = merged.splice(best.i, 1);
+      const = merged.splice(best.i, 1);
       merged.unshift(wiki);
     }
   }
 
-  // Host-diversity cap on page 1: don't let a single host occupy more than
-  // N slots in the top results. This prevents Reddit / forum link-dumps
-  // from crowding out authoritative sources. Own-index hits are exempt.
   if (page === 1) {
     const MAX_PER_HOST = 3;
     const counts = new Map();
@@ -966,35 +631,24 @@ export async function metaSearch(q, opts = {}) {
     for (const r of merged) {
       const h = (r.host || "").toLowerCase();
       const n = counts.get(h) || 0;
-      if (r.ownIndex || !h || n < MAX_PER_HOST) {
+      if (r.ownIndex ||!h || n < MAX_PER_HOST) {
         counts.set(h, n + 1);
         head.push(r);
       } else {
         tail.push(r);
       }
     }
-    merged = [...head, ...tail];
+    merged = [...head,...tail];
   }
 
   const hasMore = merged.length > perPage;
   const results = merged.slice(0, perPage);
 
-  // Enrich every result with a `preview` block. For Wikipedia hits we
-  // fetch the REST summary (parallel, shared 6s budget, LRU cached). For
-  // non-wiki results we synthesise from the snippet we already have.
   await enrichPreviews(results);
 
-  // Instant-answer box (page 1 only). Strategy:
-  //   1) If a Wikipedia hit exists, use its REST extract (richest, sourced).
-  //   2) Otherwise synthesise an extractive summary from the top results'
-  //      snippets — concatenate the best sentences, dedupe, cap at ~450
-  //      chars. This is a principled fallback, not a generative model.
-  //   3) Expose `sources` so the UI can render citation links.
   let instant = null;
   if (page === 1 && results.length) {
-    const wiki = results.find(
-      (r) => r.preview && r.preview.source === "Wikipedia"
-    );
+    const wiki = results.find(r => r.preview && r.preview.source === "Wikipedia");
     if (wiki) {
       instant = {
         source: "Wikipedia",
@@ -1018,7 +672,5 @@ export async function metaSearch(q, opts = {}) {
     total: merged.length,
     hasMore,
     instant,
-    // Internal-only engine counts are omitted on purpose. Front-end doesn't
-    // need them and we don't want to leak upstream identity.
   };
 }
