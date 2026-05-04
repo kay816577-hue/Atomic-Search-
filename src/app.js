@@ -451,7 +451,18 @@ export function buildApp() {
     }
   });
 
-  app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
+
+// VirusTotal redirect check
+  app.get('/go', async (c) => {
+    const url = c.req.query('url');
+    if (!url) return c.text('Missing url', 400);
+    const s = await safetyCheck(url);
+    if (s.verdict === 'malicious') {
+      return c.html(`<h1 style="color:#d00;font-family:sans-serif;text-align:center;margin-top:50px">⚠️ Geblokkeerd door VirusTotal</h1><p style="text-align:center">Malicious: ${s.malicious || 0}</p><p style="text-align:center"><a href="/">Terug</a></p>`, 403);
+    }
+    return c.redirect(url);
+  });          
+         app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
 
   app.get("/api/stats", async (c) => {
     const s = await storageStats();
