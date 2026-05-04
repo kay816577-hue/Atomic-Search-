@@ -2,9 +2,16 @@
   "name": "atomic-search",
   "version": "1.0.0",
   "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
     "linkedom": "^0.16.10",
     "nanoid": "^5.0.7"
   }
-}
+} 
