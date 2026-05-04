@@ -611,8 +611,7 @@ export async function metaSearch(q, opts = {}) {
       })
 .sort((a, b) => (a.r.title || "").length - (b.r.title || "").length);
     if (wikiMatches.length && wikiMatches[0].i > 0) {
-      const best = wikiMatches[0];
-      const = merged.splice(best.i, 1); // REGEL 621: MET
+      const best = wikiMatches[const wiki = merged.splice(best.i, 1);
       merged.unshift(wiki);
     }
   }
