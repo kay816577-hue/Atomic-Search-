@@ -1,83 +1,47 @@
-// Principled ranking for Atomic Search.
-//
-// Every signal is a pure function that returns a value in [0, 1], so the
-// final score is a transparent weighted sum. This file carries ALL the
-// ranking math so the call-sites (aggregator.js) stay declarative.
-//
-// Signals (each 0..1):
-//   bm25        : BM25-style title+snippet relevance vs query tokens
-//   titleMatch  : exact / prefix / coverage bonus on the (brand-stripped) title
-//   authority   : POPULAR_HOSTS tier normalised (0, 0.33, 0.66, 1.0)
-//   structure   : homepage / shallow-path / deep-path prior
-//   agreement   : cross-source agreement (how many engines returned this URL)
-//   rrf         : normalised reciprocal-rank-fusion of upstream positions
-//
-// Weights sum to 1. Changing weights is a one-line edit; every signal is
-// independently unit-testable (see ranking.test.js).
+// src/ranking.js — v6 Google-like without SEO spam
+// Goal: Relevance + Authority + Freshness. No EMD/keyword spam hacks.
+// Every signal 0..1. Weights sum to 1. Transparent math.
 
 export const WEIGHTS = Object.freeze({
-  bm25: 0.28,
-  titleMatch: 0.27,
-  agreement: 0.10,
-  authority: 0.12,
-  rrf: 0.07,
-  structure: 0.08,
-  proximity: 0.08, // v5: phrase-proximity bonus in snippet
+  relevance: 0.45,    // BM25 + phrase proximity + title intent
+  authority: 0.25,    // Host tier + HTTPS + link signals
+  freshness: 0.15,    // Recency boost for newsy queries
+  quality: 0.10,      // Content depth, structure, not-parked
+  agreement: 0.05,    // Cross-engine consensus
 });
 
-// v5 "parked / ad-heavy" host demotion. Appearing here reduces the final
-// score by up to PARKED_PENALTY. Conservative — only genuinely content-
-// free hosts belong here.
+// Known parked/ad-heavy domains. Hard penalty, not soft demote.
 const PARKED_HOSTS = new Set([
-  "example.com", "example.org", "example.net",
-  "parking.namebright.com", "sedoparking.com", "parking-page.com",
-  "domainmarket.com", "godaddy.com",
-  "hugedomains.com", "ww1.godaddy.com",
-  "buydomains.com", "dan.com",
-  "blogspot.com", // hostnames that are entirely parked land here only when
-  // the full domain matches; per-subdomain exceptions are handled via the
-  // allow-list in aggregator.js rather than by listing every subdomain.
+  "example.com","example.org","example.net",
+  "sedoparking.com","parking-page.com","domainmarket.com",
+  "hugedomains.com","buydomains.com","dan.com",
+  "ww1.godaddy.com","parking.namebright.com"
 ]);
-const PARKED_PENALTY = 0.35;
 
-export function parkedDemote(host) {
-  if (!host) return 0;
-  const h = host.toLowerCase().replace(/^www\./, "");
-  return PARKED_HOSTS.has(h) ? PARKED_PENALTY : 0;
+// Authority tiers. Tier 3 = wikipedia/github/mdn tier. Tier 0 = unknown.
+// Inject from aggregator.js based on your POPULAR_HOSTS list.
+export function authorityScore(tier, url) {
+  const t = Number(tier) || 0;
+  let score = t >= 3 ? 1.0 : t === 2 ? 0.6 : t === 1 ? 0.3 : 0.0;
+  
+  try {
+    const u = new URL(url);
+    // HTTPS bonus. HTTP = spam signal.
+    if (u.protocol === "https:") score = Math.min(1, score + 0.1);
+    // .edu/.gov = instant authority
+    if (/\.(edu|gov)(\.|$)/i.test(u.hostname)) score = 1.0;
+  } catch {}
+  
+  return score;
 }
 
-// Tiny synonym table that demonstrably helps short queries. Additions
-// should be conservative — every entry widens BM25 recall.
-const SYNONYMS = {
-  docs: ["documentation", "doc"],
-  documentation: ["docs"],
-  js: ["javascript"],
-  javascript: ["js"],
-  ts: ["typescript"],
-  typescript: ["ts"],
-  py: ["python"],
-  python: ["py"],
-  rs: ["rust"],
-  go: ["golang"],
-  golang: ["go"],
-  k8s: ["kubernetes"],
-  kubernetes: ["k8s"],
-  postgres: ["postgresql"],
-  postgresql: ["postgres"],
-  psql: ["postgresql", "postgres"],
-  gh: ["github"],
-  so: ["stackoverflow"],
-};
-
 const STOPWORDS = new Set([
-  "the", "a", "an", "of", "is", "are", "to", "in", "on", "for", "and", "or",
-  "it", "be", "was", "were", "by", "at", "as", "this", "that", "with",
-  "from", "what", "who", "why", "how", "do", "does", "did",
+  "the","a","an","of","is","are","to","in","on","for","and","or","by","at",
+  "as","this","that","with","from","it","be","was","were","what","who","how"
 ]);
 
-// Titles often include a site suffix. Strip it before exact-match checks.
-const TITLE_SUFFIX_RE =
-  /\s*[|\-–—·:]\s*(wikipedia(?:,\s*the\s*free\s*encyclopedia)?|wiki|mdn\s*web\s*docs|mdn|github|docs|documentation|official\s*site|home\s*page|home|blog)\s*$/i;
+// Aggressive suffix strip. We rank content, not domain names.
+const TITLE_SUFFIX_RE = /\s*[|\-–—·:]\s*(wikipedia|wiki|mdn|github|docs|documentation|official|home|blog|youtube|reddit)\s*$/i;
 
 export function stripTitleBrand(t) {
   return (t || "").replace(TITLE_SUFFIX_RE, "").trim();
@@ -88,225 +52,207 @@ export function tokenise(s) {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(t => t.length >= 2 && !STOPWORDS.has(t));
 }
 
 export function buildQueryContext(query) {
-  const all = tokenise(query);
-  const meaningful = all.filter((t) => !STOPWORDS.has(t) && t.length >= 2);
-  const tokens = meaningful.length ? meaningful : all;
+  const tokens = tokenise(query);
+  const isQuestion = /^(who|what|when|where|why|how|does|is|can)\b/i.test(query);
+  const isNewsy = /\b(latest|news|today|2024|2025|2026|update|release)\b/i.test(query);
   return {
     raw: (query || "").trim(),
-    phrase: tokens.join(" "),
     tokens,
     tokenSet: new Set(tokens),
+    isQuestion,
+    isNewsy,
+    phrase: tokens.join(" ")
   };
 }
 
-// ---------- individual signals ----------
-
-// BM25-ish saturation scoring. We don't carry a real IDF corpus (no fixed
-// vocabulary; public engines give us snippets on demand) so we collapse to
-// term-frequency saturation with title vs snippet field weighting.
-// Returns a value in [0, 1].
+// ---- RELEVANCE SIGNAL ----
+// BM25 + proximity + exact intent. No EMD boost. No keyword density spam.
 const BM25_K1 = 1.2;
-const BM25_TITLE_W = 3.0;
-const BM25_SNIPPET_W = 1.0;
+const BM25_B = 0.75;
 
-function termFrequency(text, token) {
+function termFreq(text, token) {
   if (!text || !token) return 0;
-  // Word-boundary-ish match so "linux" doesn't spuriously hit "linuxmint".
-  // We accept prefix matches ("react" in "reactive") because search
-  // snippets are short and prefix matching is usually what users want.
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(token)}`, "giu");
-  const m = text.match(re);
-  return m ? m.length : 0;
-}
-
-// Generate conservative stem variants for a token: trailing-s drop/add,
-// common -ing/-ed endings. Returns an array that always includes the
-// original. Each variant is matched with a reduced weight so "running"
-// doesn't dominate "run" but still scores.
-function variantsFor(token) {
-  const out = new Set([token]);
-  const syns = SYNONYMS[token];
-  if (syns) for (const s of syns) out.add(s);
-  // Plural/singular
-  if (token.length > 3) {
-    if (token.endsWith("ies")) out.add(token.slice(0, -3) + "y");
-    else if (token.endsWith("es")) out.add(token.slice(0, -2));
-    else if (token.endsWith("s")) out.add(token.slice(0, -1));
-    else out.add(token + "s");
-  }
-  // ing / ed
-  if (token.length > 5 && token.endsWith("ing")) out.add(token.slice(0, -3));
-  if (token.length > 4 && token.endsWith("ed")) out.add(token.slice(0, -2));
-  return Array.from(out);
-}
-
-// Highest term-frequency across any variant of the token. We don't sum
-// across variants because that would over-reward multi-form occurrences
-// (we want "docs" and "documentation" to count roughly the same).
-function tfWithVariants(text, token) {
-  const variants = variantsFor(token);
-  let best = 0;
-  for (const v of variants) {
-    const tf = termFrequency(text, v);
-    if (tf > best) best = tf;
-  }
-  return best;
+  const re = new RegExp(`\\b${escapeRe(token)}\\b`, "gi");
+  return (text.match(re) || []).length;
 }
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function bm25Score(item, ctx) {
+function bm25Saturation(tf, docLen, avgDocLen) {
+  const numerator = tf * (BM25_K1 + 1);
+  const denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLen / avgDocLen));
+  return numerator / denominator;
+}
+
+// Proximity: tokens close together = higher intent match
+function proximityScore(text, tokens) {
+  if (tokens.length < 2 || !text) return 0;
+  const positions = [];
+  for (const t of tokens) {
+    const idx = text.indexOf(t);
+    if (idx === -1) return 0; // all tokens must exist
+    positions.push(idx);
+  }
+  positions.sort((a, b) => a - b);
+  const span = positions[positions.length - 1] - positions[0];
+  if (span <= 50) return 1.0;
+  if (span >= 400) return 0.0;
+  return 1 - (span - 50) / 350;
+}
+
+export function relevanceScore(item, ctx) {
   const tokens = ctx.tokens;
   if (!tokens.length) return 0;
+  
   const title = stripTitleBrand((item.title || "").toLowerCase());
-  const snippet = (item.snippet || item.text || "").toLowerCase();
-  let sum = 0;
-  for (const tok of tokens) {
-    const tfT = tfWithVariants(title, tok);
-    const tfS = tfWithVariants(snippet, tok);
-    const satT = tfT / (tfT + BM25_K1);     // → [0,1)
-    const satS = tfS / (tfS + BM25_K1);     // → [0,1)
-    sum += BM25_TITLE_W * satT + BM25_SNIPPET_W * satS;
+  const text = (item.snippet || item.text || "").toLowerCase();
+  const docLen = title.split(/\s+/).length + text.split(/\s+/).length;
+  const avgDocLen = 600; // Tuned for web pages
+  
+  // 1. BM25 core
+  let bm25Sum = 0;
+  let titleHits = 0;
+  for (const t of tokens) {
+    const tfTitle = termFreq(title, t) * 3; // Title 3x weight
+    const tfText = termFreq(text, t);
+    const tf = tfTitle + tfText;
+    bm25Sum += bm25Saturation(tf, docLen, avgDocLen);
+    if (tfTitle > 0) titleHits++;
   }
-  // Normalise by max possible saturation sum:
-  //   perfect = (W_title + W_snippet) * tokens.length  (every token
-  //   saturating both fields). Dividing keeps us in [0,1].
-  const maxPossible = (BM25_TITLE_W + BM25_SNIPPET_W) * tokens.length;
-  return clamp01(sum / maxPossible);
-}
-
-export function titleMatchScore(item, ctx) {
-  const title = stripTitleBrand((item.title || "").toLowerCase());
-  if (!title || !ctx.tokens.length) return 0;
-  const phrase = ctx.phrase;
-
-  // Exact match (after brand strip) is the strongest signal.
-  if (title === phrase) return 1;
-  if (title.startsWith(phrase + " ") || title.startsWith(phrase + ":")) return 0.85;
-  if (title.endsWith(" " + phrase)) return 0.7;
-
-  // Phrase contained anywhere in title.
-  if (phrase.length >= 3 && title.includes(phrase)) {
-    // Shortness bonus: shorter titles with the phrase are more canonical.
-    const tw = title.split(/\s+/).length;
-    const qw = ctx.tokens.length;
-    const noise = Math.max(0, tw - qw);
-    return clamp01(0.55 + 0.15 / (1 + noise * 0.5));
+  const bm25 = bm25Sum / (tokens.length * 4); // Normalize
+  
+  // 2. Phrase match bonus. Exact phrase in title = strong intent.
+  let phraseBonus = 0;
+  if (ctx.phrase.length >= 4) {
+    if (title === ctx.phrase) phraseBonus = 1.0;
+    else if (title.startsWith(ctx.phrase)) phraseBonus = 0.7;
+    else if (title.includes(ctx.phrase)) phraseBonus = 0.5;
+    else if (text.includes(ctx.phrase)) phraseBonus = 0.3;
   }
-
-  // Token coverage.
-  let hit = 0;
-  for (const t of ctx.tokens) if (title.includes(t)) hit++;
-  const coverage = hit / ctx.tokens.length;
-  // Cap non-phrase title matches at 0.5 so an exact-title always wins.
-  return clamp01(coverage * 0.5);
+  
+  // 3. Proximity in snippet
+  const prox = proximityScore(text, tokens) * 0.5;
+  
+  // 4. Title coverage: all query tokens in title = canonical result
+  const titleCoverage = titleHits / tokens.length;
+  
+  // Combine: BM25 base + intent bonuses
+  const score = bm25 * 0.5 + phraseBonus * 0.3 + prox * 0.1 + titleCoverage * 0.1;
+  return clamp01(score);
 }
 
-// POPULAR_HOSTS tier → authority score in [0,1]. Tiers are injected so
-// aggregator.js can keep owning the domain list.
-export function authorityScore(tier) {
-  const t = Number(tier) || 0;
-  if (t >= 3) return 1.0;
-  if (t === 2) return 0.66;
-  if (t === 1) return 0.33;
-  return 0.0;
+// ---- FRESHNESS SIGNAL ----
+// Boost recent docs for newsy queries. Decay over 90 days.
+export function freshnessScore(item, ctx) {
+  const ageMs = Date.now() - (item.indexed_at || 0);
+  const ageDays = ageMs / (24 * 3600 * 1000);
+  
+  if (ageDays < 1) return 1.0;
+  if (ageDays < 7) return 0.8;
+  if (ageDays < 30) return 0.5;
+  if (ageDays < 90) return 0.2;
+  
+  // For newsy queries, old = penalty. For evergreen, neutral.
+  if (ctx.isNewsy && ageDays > 30) return 0.0;
+  return 0.1; // Old but not penalized for evergreen topics
 }
 
-// URL-structure prior. Homepages of sites whose name matches a query token
-// (e.g. kernel.org/ for "linux kernel") are the canonical entry point and
-// deserve a lift. Deep paths are neutral.
-export function structureScore(url, ctx) {
+// ---- QUALITY SIGNAL ----
+// Penalize thin/parked. Reward depth + structure.
+export function qualityScore(item) {
+  let score = 0.5; // baseline
+  
+  const text = item.text || item.snippet || "";
+  const title = item.title || "";
+  
+  // 1. Content depth
+  const words = text.split(/\s+/).length;
+  if (words < 50) score -= 0.4; // Thin content
+  else if (words > 300) score += 0.2; // Substantial
+  
+  // 2. Parked domain check
   try {
-    const u = new URL(url);
-    const path = u.pathname.replace(/\/+$/, "");
-    const host = u.hostname.replace(/^www\./, "").toLowerCase();
-    const isHome = (path === "" || path === "/") && !u.search;
-    const root = host.split(".").slice(-2)[0] || host;
-    const hostMatchesQuery = ctx.tokens.some(
-      (t) => t.length >= 3 && (root === t || host.split(".").includes(t))
-    );
-    if (isHome && hostMatchesQuery) return 1.0;
-    if (isHome) return 0.5;
-    // Shallow path (≤2 segments) is slightly preferred for canonical pages.
-    const depth = path.split("/").filter(Boolean).length;
-    if (depth <= 2) return 0.2;
-    return 0.0;
-  } catch { return 0.0; }
+    const host = new URL(item.url).hostname.replace(/^www\./, "");
+    if (PARKED_HOSTS.has(host)) return 0.0; // Instant kill
+  } catch {}
+  
+  // 3. Title quality: not empty, not just "Home", not clickbait caps
+  if (!title || /^home$/i.test(title.trim())) score -= 0.3;
+  if (title === title.toUpperCase() && title.length > 10) score -= 0.2; // CLICKBAIT
+  
+  // 4. URL structure: homepage or clean path > deep tracking URLs
+  try {
+    const u = new URL(item.url);
+    const path = u.pathname;
+    if (path === "/" || path === "") score += 0.1;
+    if (/\/(tag|category|page\/\d+)/i.test(path)) score -= 0.1; // Pagination/archive
+    if (u.search.length > 100) score -= 0.2; // UTM spam
+  } catch {}
+  
+  return clamp01(score);
 }
 
-// Cross-source agreement: how many distinct engines returned this URL,
-// normalised against a soft "plenty" threshold of 4.
+// ---- AGREEMENT SIGNAL ----
+// 1 engine = 0. 2 = 0.5. 4+ = 1.0. Log scale.
 export function agreementScore(nEngines) {
   const n = Math.max(1, Number(nEngines) || 1);
   if (n <= 1) return 0.0;
-  return clamp01(Math.log2(n) / 2); // 2 engines → 0.5, 4 → 1.0
+  return clamp01(Math.log2(n) / 2);
 }
 
-// Normalised RRF score. `rrfRaw` is the raw RRF sum we computed across
-// engines for this URL; `rrfMax` is the maximum observed in this set.
-export function rrfNormalised(rrfRaw, rrfMax) {
-  if (!rrfMax) return 0;
-  return clamp01(rrfRaw / rrfMax);
-}
-
-// v5: phrase-proximity score. Rewards results where query tokens appear
-// close to each other in the snippet (indicates the passage is actually
-// about the query, not just incidentally mentioning each word). Returns
-// a value in [0, 1].
-export function proximityScore(item, ctx) {
-  const tokens = ctx.tokens;
-  if (tokens.length < 2) return 0; // single-token queries get neutral 0
-
-  const text = ((item.title || "") + " " + (item.snippet || item.text || "")).toLowerCase();
-  if (!text) return 0;
-
-  // Find the first occurrence of each token. If any is missing, no
-  // proximity bonus.
-  const positions = [];
-  for (const tok of tokens) {
-    const variants = variantsForExport(tok);
-    let best = -1;
-    for (const v of variants) {
-      const idx = text.indexOf(v);
-      if (idx >= 0 && (best < 0 || idx < best)) best = idx;
-    }
-    if (best < 0) return 0;
-    positions.push(best);
-  }
-
-  positions.sort((a, b) => a - b);
-  const span = positions[positions.length - 1] - positions[0];
-  // Perfect proximity (span of 0..40 chars) → 1. 300+ → 0.
-  if (span <= 40) return 1;
-  if (span >= 300) return 0;
-  return clamp01(1 - (span - 40) / 260);
-}
-
-// Internal variant helper exposed under another name so we don't have to
-// export `variantsFor` publicly (kept stable for tests).
-function variantsForExport(token) { return variantsFor(token); }
-
-// ---------- combine ----------
-
-export function combineScore(signals, weights = WEIGHTS) {
-  let total = 0;
-  for (const k of Object.keys(weights)) {
-    const w = weights[k] || 0;
-    const v = clamp01(signals[k]);
-    total += w * v;
-  }
+// ---- MAIN COMBINE ----
+export function combineScore(item, ctx, signals) {
+  const relevance = relevanceScore(item, ctx);
+  const authority = authorityScore(signals.authorityTier || 0, item.url);
+  const freshness = freshnessScore(item, ctx);
+  const quality = qualityScore(item);
+  const agreement = agreementScore(signals.nEngines || 1);
+  
+  // Weighted sum
+  let total = 
+    WEIGHTS.relevance * relevance +
+    WEIGHTS.authority * authority +
+    WEIGHTS.freshness * freshness +
+    WEIGHTS.quality * quality +
+    WEIGHTS.agreement * agreement;
+  
+  // Hard penalties last
+  if (quality === 0) return 0; // Parked domain = dead
+  
   return clamp01(total);
+}
+
+// Export for aggregator.js
+export function rank(query, docs, signals = {}) {
+  const ctx = buildQueryContext(query);
+  
+  // P0 FIX: Pre-filter + cap at 200 docs to prevent CPU spike
+  const queryTokens = ctx.tokens;
+  const prefiltered = docs.filter(doc => {
+    const text = (doc.title + " " + (doc.text || doc.snippet || "")).toLowerCase();
+    return queryTokens.some(t => text.includes(t));
+  }).slice(0, 200);
+  
+  const scored = prefiltered.map(doc => {
+    const docSignals = {
+      authorityTier: signals.authorityTier?.[doc.host] || 0,
+      nEngines: signals.nEngines?.[doc.url] || 1
+    };
+    const score = combineScore(doc, ctx, docSignals);
+    return { ...doc, score, _debug: { relevance: relevanceScore(doc, ctx) } };
+  });
+  
+  scored.sort((a, b) => b.score - a.score);
+  return scored;
 }
 
 function clamp01(x) {
   if (!Number.isFinite(x)) return 0;
-  if (x < 0) return 0;
-  if (x > 1) return 1;
-  return x;
+  return x < 0 ? 0 : x > 1 ? 1 : x;
 }
