@@ -1,15 +1,20 @@
 {
-  "name": "werender-search-hybrid",
+  "name": "atomic-search",
   "version": "1.0.0",
+  "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npm rebuild better-sqlite3 --build-from-source"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0",
-    "node-fetch": "^3.3.2",
-    "cors": "^2.8.5"
+    "@hono/node-server": "^1.12.0",
+    "better-sqlite3": "^9.4.0",
+    "hono": "^4.5.0",
+    "linkedom": "^0.16.10",
+    "nanoid": "^5.0.7"
   }
 }
